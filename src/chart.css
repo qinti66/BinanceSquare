@@ -1,0 +1,25 @@
+.chart-card { min-width: 0; overflow: hidden; border: 1px solid #292e37; border-radius: 9px; background: #14171c; color: #e6e8ee; }
+.chart-header { display: flex; justify-content: space-between; gap: 8px; align-items: center; padding: 11px 14px 0; }
+.chart-heading { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; min-width: 0; font-size: 12px; }
+.chart-pair { font-weight: 650; letter-spacing: .1px; }
+.chart-period { color: #828a98; font-size: 11px; }
+.chart-mode { margin-left: 4px; color: #38be9b; background: #19302b; border-radius: 4px; padding: 2px 5px; font-size: 9px; line-height: 1.6; }
+.chart-mode.chart-demo { color: #baa765; background: #2c281b; }
+.chart-actions { display: flex; align-items: center; gap: 2px; }
+.chart-icon { display: grid; place-items: center; border: 0; border-radius: 4px; width: 24px; height: 24px; padding: 0; background: transparent; color: #7f8794; cursor: pointer; }
+.chart-icon:hover { color: #e6e8ee; background: #242830; }
+.chart-icon:disabled { opacity: .4; cursor: wait; }
+.chart-icon:focus-visible,.chart-error button:focus-visible { outline: 2px solid #f0b90b; outline-offset: 2px; }
+.chart-summary { display: flex; align-items: baseline; gap: 9px; min-height: 22px; padding: 3px 14px 0; font-size: 11px; }
+.chart-summary strong { color: #21a584; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.chart-positive { color: #21a584; }.chart-negative { color: #ef6464; }
+.chart-average { margin-left: auto; font-size: 9px; color: #c39c35; }
+.chart-stage { position: relative; padding: 0 5px 0 8px; }
+.chart-canvas { width: 100%; height: 275px; }
+.chart-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #717987; border-top: 1px solid #242830; padding: 7px 13px; font-size: 9px; }
+.chart-footer > span:first-child { display: inline-flex; align-items: center; gap: 5px; }
+.chart-error { display: flex; position: absolute; inset: 0; padding: 15px 24px; align-items: center; justify-content: center; flex-direction: column; gap: 10px; text-align: center; background: #14171cf5; color: #a5adba; font-size: 11px; }
+.chart-error > svg { color: #f0b90b; }.chart-error button { border: 1px solid #474130; color: #e0bd51; border-radius: 5px; padding: 6px 12px; background: #2b281e; cursor: pointer; font-size: 11px; }
+.chart-export-error { padding: 8px 12px; color: #ef9b90; font-size: 11px; }
+@media (max-width: 550px) { .chart-footer { font-size: 8px; }.chart-canvas { height: 170px; }.chart-mode { font-size: 8px; } }
+
