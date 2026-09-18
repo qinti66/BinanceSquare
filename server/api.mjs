@@ -47,10 +47,12 @@ async function readJson(request, limit = MB) {
   return result;
 }
 
-export function createApiServer({ dataDirectory = path.resolve('.data'), fetchImpl = fetch, pause, allowedOrigins = FRONTENDS } = {}) {
+export function createApiServer({ dataDirectory = path.resolve('.data'), fetchImpl = fetch, pause, allowedOrigins = FRONTENDS, accessPolicy, localOnly = true } = {}) {
   const store = createStore(dataDirectory);
   const publisher = createBinancePublisher({ fetchImpl, pause });
   const active = new Set();
+  const idleWaiters = new Set();
+  const whenIdle = () => active.size === 0 ? Promise.resolve() : new Promise(resolve => idleWaiters.add(resolve));
   const send = (response, status, data) => {
     if (response.destroyed) return;
     response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Cross-Origin-Resource-Policy': 'same-origin' });
@@ -138,20 +140,25 @@ export function createApiServer({ dataDirectory = path.resolve('.data'), fetchIm
       throw new HttpError(503, '本地发布记录保存失败，请重试查询同一次提交；请勿新建重复发布。', 'STORAGE_ERROR');
     } finally {
       active.delete(entry.requestId);
+      if (!active.size) { for (const resolve of idleWaiters) resolve(); idleWaiters.clear(); }
     }
   }
 
-  const server = http.createServer(async (request, response) => {
+  const handler = async (request, response) => {
     try {
       const host = request.headers.host || '';
-      requireValue(/^(?:127\.0\.0\.1|localhost)(?::\d{1,5})?$/.test(host), '仅允许本机访问。', 403, 'HOST_REJECTED');
-      const origin = request.headers.origin;
-      requireValue(!origin || origin === `http://${host}` || allowedOrigins.includes(origin), '拒绝跨站请求。', 403, 'ORIGIN_REJECTED');
-      requireValue(request.headers['sec-fetch-site'] !== 'cross-site', '拒绝跨站请求。', 403, 'ORIGIN_REJECTED');
+      if (accessPolicy) {
+        requireValue(accessPolicy(request) === true, '拒绝当前请求。', 403, 'ACCESS_REJECTED');
+      } else {
+        requireValue(/^(?:127\.0\.0\.1|localhost)(?::\d{1,5})?$/.test(host), '仅允许本机访问。', 403, 'HOST_REJECTED');
+        const origin = request.headers.origin;
+        requireValue(!origin || origin === `http://${host}` || allowedOrigins.includes(origin), '拒绝跨站请求。', 403, 'ORIGIN_REJECTED');
+        requireValue(request.headers['sec-fetch-site'] !== 'cross-site', '拒绝跨站请求。', 403, 'ORIGIN_REJECTED');
+      }
       const url = new URL(request.url, `http://${host}`);
       const pathname = url.pathname;
       const method = request.method;
-      if (method === 'GET' && pathname === '/api/health') return send(response, 200, { ok: true, localOnly: true, limits: { imageBytes: 10 * MB, videoBytes: 100 * MB }, capabilities: { post: true, article: true, video: true, richText: false, nativeChart: false, remoteHistory: false } });
+      if (method === 'GET' && pathname === '/api/health') return send(response, 200, { ok: true, localOnly, limits: { imageBytes: 10 * MB, videoBytes: 100 * MB }, capabilities: { post: true, article: true, video: true, richText: false, nativeChart: false, remoteHistory: false } });
       if (pathname === '/api/accounts' && method === 'GET') return send(response, 200, { accounts: store.data.accounts.map(publicAccount) });
       if (pathname === '/api/accounts' && method === 'POST') {
         const input = await readJson(request);
@@ -226,11 +233,11 @@ export function createApiServer({ dataDirectory = path.resolve('.data'), fetchIm
         return send(response, 201, { media });
       }
       const mediaRoute = pathname.match(/^\/api\/media\/([\w-]+)$/);
-      if (mediaRoute && method === 'GET') {
+      if (mediaRoute && ['GET', 'HEAD'].includes(method)) {
         const media = mediaById(mediaRoute[1]);
         requireValue(media, '媒体文件不存在。', 404);
         const filePath = path.join(store.directory, 'media', media.id);
-        requireValue(fs.existsSync(filePath), '媒体文件不存在。', 404);
+        requireValue(fs.existsSync(filePath) && fs.lstatSync(filePath).isFile(), '媒体文件不存在。', 404);
         const headers = { 'Content-Type': media.type, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'private, max-age=3600', 'Cross-Origin-Resource-Policy': 'same-origin', 'Accept-Ranges': 'bytes' };
         if (request.headers.range) {
           const match = request.headers.range.match(/^bytes=(\d+)-(\d*)$/);
@@ -238,9 +245,12 @@ export function createApiServer({ dataDirectory = path.resolve('.data'), fetchIm
           const start = Number(match[1]); const end = match[2] ? Math.min(Number(match[2]), media.size - 1) : media.size - 1;
           requireValue(start <= end && start < media.size, '文件范围无效。', 416);
           response.writeHead(206, { ...headers, 'Content-Range': `bytes ${start}-${end}/${media.size}`, 'Content-Length': end - start + 1 });
-          fs.createReadStream(filePath, { start, end }).pipe(response);
+          if (method === 'HEAD') response.end();
+          else fs.createReadStream(filePath, { start, end }).on('error', () => response.destroy()).pipe(response);
         } else {
-          response.writeHead(200, { ...headers, 'Content-Length': media.size }); fs.createReadStream(filePath).pipe(response);
+          response.writeHead(200, { ...headers, 'Content-Length': media.size });
+          if (method === 'HEAD') response.end();
+          else fs.createReadStream(filePath).on('error', () => response.destroy()).pipe(response);
         }
         return;
       }
@@ -276,9 +286,10 @@ export function createApiServer({ dataDirectory = path.resolve('.data'), fetchIm
       const known = error instanceof HttpError;
       send(response, known ? error.status : 500, { error: known ? error.message : '本地服务处理失败，请稍后重试。', code: known ? error.code : 'INTERNAL_ERROR' });
     }
-  });
+  };
+  const server = http.createServer(handler);
   server.requestTimeout = 180_000;
   server.headersTimeout = 15_000;
-  return { server, store };
+  return { server, store, handler, whenIdle };
 }
 

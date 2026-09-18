@@ -303,7 +303,7 @@ export function App() {
           active.current.updatedAt === d.updatedAt
         ) {
           setSaveStatus("已保存到此浏览器");
-          setSaveError("本地服务未同步：" + e.message);
+          setSaveError("服务端未同步：" + e.message);
         }
         if (manual)
           notify(
@@ -329,7 +329,7 @@ export function App() {
       );
       setSaveError("");
     } catch {
-      setSaveError("浏览器存储已满，请立即保存到本地服务。");
+      setSaveError("浏览器存储已满，请立即保存到服务端。");
     }
     clearTimeout(timer.current);
     timer.current = setTimeout(() => persist(draft), 650);
@@ -808,7 +808,7 @@ export function App() {
         {serviceError && (
           <div className="service-banner">
             <WarningCircle size={18} />
-            <span>本地服务连接失败，当前编辑保存在此浏览器。</span>
+            <span>服务连接失败，当前编辑保存在此浏览器。</span>
             <button onClick={refresh}>重试</button>
           </div>
         )}
@@ -1255,7 +1255,7 @@ export function App() {
                 <strong>你的账号，由你掌控</strong>
                 <p>
                   展示名称仅在本工作台使用。请使用币安广场 OpenAPI
-                  Key，密钥在本机加密保存。
+                  Key，密钥在服务端加密保存。
                 </p>
               </div>
               <a
@@ -1592,7 +1592,7 @@ export function App() {
                   setForm((f) => ({ ...f, apiKey: e.target.value }))
                 }
               />
-              <small>密钥仅传送到本地服务，加密保存在本机。</small>
+              <small>密钥仅传送到本站服务端，并加密保存。</small>
             </label>
             <div className="inline-info">
               <Info size={18} />

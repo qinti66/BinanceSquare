@@ -1,6 +1,6 @@
 import test, { beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { backupDraft, localDrafts, mergeDrafts, forgetLocalDraft, readPending, textBody } from '../src/client.js';
+import { backupDraft, localDrafts, mergeDrafts, forgetLocalDraft, readPending, textBody, uid } from '../src/client.js';
 
 let originalStorage;
 let values;
@@ -123,3 +123,21 @@ test('clearing an existing draft replaces its old backup with the latest empty e
   assert.deepEqual(localDrafts(), [cleared]);
 });
 
+
+test('IP over HTTP UUID fallback keeps random entropy and RFC 4122 version bits', () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+  let counter = 0;
+  try {
+    Object.defineProperty(globalThis, 'crypto', { configurable: true, value: {
+      getRandomValues(bytes) { counter++; bytes.fill(counter); return bytes; },
+    } });
+    const first = uid();
+    const second = uid();
+    assert.match(first, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    assert.notEqual(first, second);
+    assert.equal(counter, 2);
+  } finally {
+    if (original) Object.defineProperty(globalThis, 'crypto', original);
+    else delete globalThis.crypto;
+  }
+});

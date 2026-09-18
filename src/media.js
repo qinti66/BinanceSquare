@@ -26,7 +26,7 @@ export async function uploadFile(file) {
     return result.media;
   } catch (error) {
     if (error.name === 'AbortError') throw new Error('媒体上传超时，请检查连接后重试');
-    if (error instanceof TypeError) throw new Error('无法连接媒体服务，请确认本地服务正在运行');
+    if (error instanceof TypeError) throw new Error('无法连接媒体服务，请确认服务正在运行');
     throw error;
   } finally {
     clearTimeout(timeout);

@@ -10,3 +10,7 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 
 Selected design: first displayed ImageGen option, dark charcoal and warm yellow compose workspace. Preserve this direction. Source is docs/design-reference.png. User requested local API account management, multi-account publishing, persistent drafts and publication history.
 
+
+Deployment preference: Linux server, one-command start/stop/restart, IP + configurable port access. Use the authenticated single-port production Node server, preserve .data and .env across updates, and test HTTP (non-secure-context) browser behavior.
+
+Server configuration preference: Keep user-editable server settings in the root .env (HOST, PORT, ADMIN_USER, ADMIN_PASSWORD, DATA_DIR, PUBLIC_ORIGIN), with .env.example tracked as the template. Default to port 8081 because the user's port 8080 is occupied. When .env is absent, migrate the legacy .env.production if present and retain it; otherwise copy .env.example. .env takes precedence when both exist. Keep credentials out of Git; start.sh generates and saves a random password when ADMIN_PASSWORD is blank.

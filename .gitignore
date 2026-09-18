@@ -6,3 +6,8 @@ artifacts/
 .env
 .env.*
 !.env.example
+
+# Linux service runtime and logs
+.runtime/
+.run/
+logs/
