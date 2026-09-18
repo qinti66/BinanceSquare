@@ -5,7 +5,6 @@ import {
   ClockCounterClockwise,
   UsersThree,
   CaretRight,
-  CaretDown,
   Check,
   Plus,
   X,
@@ -39,7 +38,6 @@ import {
   api,
   uid,
   dateText,
-  demoAccounts,
   initialDraft,
   emptyDraft,
   hasContent,
@@ -50,6 +48,7 @@ import {
   mergeDrafts,
   forgetLocalDraft,
   readPending,
+  migrateBrowserWorkspace,
 } from "./client";
 import CandleChart from "./Chart";
 import { uploadFile, extractVideoCover } from "./media";
@@ -206,8 +205,8 @@ function Editor({ draft, onChange, editorRef }) {
 export function App() {
   const [draft, setDraft] = useState(() => {
     try {
-      const d = JSON.parse(localStorage.getItem("square.active") || "null");
-      if (d?.id && types[d.type]) return { ...emptyDraft(d.demo), ...d };
+      const d = migrateBrowserWorkspace();
+      if (d?.id && types[d.type]) return { ...emptyDraft(), ...d };
     } catch {}
     return initialDraft();
   });
@@ -215,7 +214,7 @@ export function App() {
     [accounts, setAccounts] = useState([]),
     [drafts, setDrafts] = useState(localDrafts),
     [history, setHistory] = useState([]);
-  const [saveStatus, setSaveStatus] = useState("正在保存"),
+  const [saveStatus, setSaveStatus] = useState("尚未输入内容"),
     [saveError, setSaveError] = useState(""),
     [serviceError, setServiceError] = useState("");
   const [toast, setToast] = useState(""),
@@ -265,7 +264,7 @@ export function App() {
       ]);
       setAccounts(a.accounts || []);
       setDrafts(mergeDrafts(d.drafts || [], localDrafts()));
-      setHistory(h.history || []);
+      setHistory((h.history || []).filter((entry) => entry.demo !== true));
       setServiceError("");
     } catch (e) {
       setServiceError(e.message);
@@ -277,8 +276,11 @@ export function App() {
   }, []);
   const persist = useCallback(
     async (d, manual = false) => {
-      if (!hasContent(d) && !localDrafts().some((x) => x.id === d.id))
+      if (!hasContent(d) && !localDrafts().some((x) => x.id === d.id)) {
+        setSaveStatus("尚未输入内容");
+        if (manual) notify("填写内容后即可保存草稿");
         return true;
+      }
       const backed = backupDraft(d);
       if (backed) setDrafts((ds) => mergeDrafts([d], ds));
       try {
@@ -318,7 +320,7 @@ export function App() {
   );
   useEffect(() => {
     active.current = draft;
-    setSaveStatus("正在保存");
+    setSaveStatus(hasContent(draft) || localDrafts().some((x) => x.id === draft.id) ? "正在保存" : "尚未输入内容");
     try {
       localStorage.setItem("square.active", JSON.stringify(draft));
       if (!backupDraft(draft)) throw Error("storage full");
@@ -355,8 +357,7 @@ export function App() {
       window.removeEventListener("pagehide", save);
     };
   }, [persist]);
-  const demo = draft.demo !== false,
-    visibleAccounts = demo ? demoAccounts : accounts,
+  const visibleAccounts = accounts,
     selected = visibleAccounts.filter((a) =>
       draft.selectedAccounts.includes(a.id),
     ),
@@ -402,7 +403,7 @@ export function App() {
     if (active.current.updatedAt !== draft.updatedAt)
       return notify("内容刚刚更新，请再次点击新建以保存最新版本");
     selection.current = null;
-    setDraft(emptyDraft(demo));
+    setDraft(emptyDraft());
     nav("compose");
   };
   const resume = async (d) => {
@@ -418,7 +419,7 @@ export function App() {
     const latest =
       mergeDrafts([d], localDrafts()).find((x) => x.id === d.id) || d;
     selection.current = null;
-    setDraft({ ...emptyDraft(latest.demo), ...latest });
+    setDraft({ ...emptyDraft(), ...latest });
     nav("compose");
     notify("已恢复草稿");
   };
@@ -427,21 +428,6 @@ export function App() {
     if (type === draft.type) return;
     if (draft.media.length || draft.chart) setModal({ kind: "switch", type });
     else update({ type });
-  };
-  const toggleMode = () => {
-    if (uploading) return notify("媒体正在上传，请稍后切换");
-    if (demo && !accounts.length) {
-      nav("accounts");
-      notify("先添加广场 API 账号，即可进入真实工作区");
-      return;
-    }
-    chartImage.current = null;
-    update({
-      demo: !demo,
-      selectedAccounts: demo
-        ? accounts.slice(0, 1).map((a) => a.id)
-        : demoAccounts.slice(0, 2).map((a) => a.id),
-    });
   };
   const addTag = (t) => {
     t = t.trim().replace(/^#+/, "").replace(/\s+/g, "");
@@ -604,10 +590,11 @@ export function App() {
           mediaIds,
           coverMediaId: m?.coverMediaId,
           duration: m?.duration,
-          demo: d.demo !== false,
+          demo: false,
         };
         setConfirmation((c) => (c ? { ...c, payload } : c));
       }
+      if (payload.demo !== false) throw Error("旧版测试提交已取消，请返回编辑并重新确认发布。");
       localStorage.setItem(
         "square.pending",
         JSON.stringify({ ...confirmation, payload }),
@@ -622,7 +609,7 @@ export function App() {
       setResult({ ...r, accounts: confirmation.accounts });
       setConfirmation(null);
       refresh();
-      notify(payload.demo ? "演示发布已完成，未发送到币安" : "已收到发布结果");
+      notify("已收到发布结果");
     } catch (e) {
       const rejected = [400, 401, 403, 404, 413, 415, 422].includes(e.status);
       if (rejected) localStorage.removeItem("square.pending");
@@ -667,7 +654,7 @@ export function App() {
         deletedIds.current.add(modal.draft.id);
         await api("/drafts/" + modal.draft.id, { method: "DELETE" });
         forgetLocalDraft(modal.draft.id);
-        if (draft.id === modal.draft.id) setDraft(emptyDraft(demo));
+        if (draft.id === modal.draft.id) setDraft(emptyDraft());
       }
       setModal(null);
       await refresh();
@@ -688,14 +675,14 @@ export function App() {
     .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
   const hs = history.filter(
     (h) =>
-      (filter === "all" || (filter === "demo" ? h.demo : !h.demo)) &&
+      h.demo !== true && (filter === "all" || h.type === filter) &&
       JSON.stringify([h.title, h.body, h.results?.map((r) => r.accountName)])
         .toLowerCase()
         .includes(search.toLowerCase()),
   );
-  const statusText = (s, d) =>
+  const statusText = (s) =>
     ({
-      success: d ? "模拟成功" : "发布成功",
+      success: "发布成功",
       failed: "发布失败",
       uncertain: "已提交，待核实",
       pending: "处理中",
@@ -718,14 +705,10 @@ export function App() {
             <small>广场矩阵工作台</small>
           </div>
         </a>
-        <button
-          className={"workspace-switch " + (!demo ? "live" : "")}
-          onClick={toggleMode}
-        >
+        <div className="workspace-switch live">
           <span className="status-dot" />
-          {demo ? "演示工作区" : "真实工作区"}
-          <CaretDown size={12} />
-        </button>
+          创作工作台
+        </div>
         <nav aria-label="主要导航">
           {[
             ["compose", PencilSimpleLine, "创作中心"],
@@ -754,7 +737,7 @@ export function App() {
             </span>
           </div>
           <div className="profile">
-            <Avatar account={demoAccounts[0]} size={36} />
+            <Avatar account={{ name: "我的工作台", color: "#343539" }} size={36} />
             <div>
               <strong>我的工作台</strong>
               <small>专注创作 · 长期主义</small>
@@ -919,10 +902,9 @@ export function App() {
                 </div>
                 {draft.chart && draft.type === "post" && (
                   <CandleChart
-                    key={draft.chart.symbol + draft.chart.interval + demo}
+                    key={draft.chart.symbol + draft.chart.interval}
                     symbol={draft.chart.symbol}
                     interval={draft.chart.interval}
-                    demo={demo}
                     onImage={onChartImage}
                     onRemove={() => {
                       chartImage.current = null;
@@ -1155,7 +1137,7 @@ export function App() {
                     <Avatar account={a} size={46} />
                     <span>
                       <strong>{a.name}</strong>
-                      <small>{a.demo ? "示例账号" : "密钥已配置"}</small>
+                      <small>密钥已配置</small>
                     </span>
                   </label>
                 ))}
@@ -1177,8 +1159,8 @@ export function App() {
                 <div className="preview-author">
                   <Avatar account={first} size={44} />
                   <div>
-                    <strong>{first?.name || "你的账号"}</strong>
-                    <small>刚刚</small>
+                    <strong>{first?.name || "选择发布账号"}</strong>
+                    <small>内容预览</small>
                   </div>
                 </div>
                 <div className="preview-body">
@@ -1230,17 +1212,15 @@ export function App() {
                   </button>
                   <button
                     className="primary"
-                    disabled={uploading || busy}
+                    disabled={uploading || busy || !selected.length}
                     onClick={prepare}
                   >
                     <PaperPlaneTilt size={18} />
-                    {demo ? "模拟发布" : "发布到"} {selected.length} 个账号
+                    发布到 {selected.length} 个账号
                   </button>
                 </div>
                 <p>
-                  {demo
-                    ? "演示模式不会向币安发送内容"
-                    : "内容将分别发布到所选账号的币安广场"}
+                  内容将分别发布到所选账号的币安广场
                 </p>
               </div>
             </aside>
@@ -1285,8 +1265,6 @@ export function App() {
                 <h3>连接你的第一个广场账号</h3>
                 <p>
                   添加 API Key 后，即可选择账号并发布内容。
-                  <br />
-                  也可以在演示工作区体验完整创作流程。
                 </p>
                 <button className="primary" onClick={() => openAccount()}>
                   <Plus size={18} />
@@ -1354,7 +1332,7 @@ export function App() {
                   nav("compose");
                 }}
               >
-                进入真实工作区
+                开始创作
                 <ArrowSquareOut size={17} />
               </button>
             )}
@@ -1379,8 +1357,9 @@ export function App() {
                     ]
                   : [
                       ["all", "全部记录"],
-                      ["real", "真实发布"],
-                      ["demo", "演示发布"],
+                      ["post", "帖子"],
+                      ["article", "文章"],
+                      ["video", "视频"],
                     ]
                 ).map(([id, t]) => (
                   <button
@@ -1440,7 +1419,6 @@ export function App() {
                     <button className="draft-content" onClick={() => resume(d)}>
                       <div>
                         <span className="badge">{types[d.type]}</span>
-                        {d.demo && <span className="badge subtle">演示</span>}
                         <h3>{d.title || "未命名草稿"}</h3>
                       </div>
                       <p>{d.body || "暂无正文"}</p>
@@ -1481,9 +1459,6 @@ export function App() {
                   <article className="history-row" key={h.id}>
                     <div className="history-main">
                       <div>
-                        <span className={"badge " + (h.demo ? "subtle" : "")}>
-                          {h.demo ? "演示发布" : "真实发布"}
-                        </span>
                         <span className="badge subtle">
                           {types[h.type] || "内容"}
                         </span>
@@ -1499,8 +1474,6 @@ export function App() {
                             {r.accountName ||
                               accounts.find((a) => a.id === r.accountId)
                                 ?.name ||
-                              demoAccounts.find((a) => a.id === r.accountId)
-                                ?.name ||
                               r.accountId}
                           </span>
                           <span className={"result-status " + r.status}>
@@ -1509,7 +1482,7 @@ export function App() {
                             ) : (
                               <WarningCircle size={16} />
                             )}{" "}
-                            {statusText(r.status, h.demo)}
+                            {statusText(r.status)}
                           </span>
                           {r.postUrl &&
                             /^https:\/\/(www\.)?binance\.com\//.test(
@@ -1673,9 +1646,7 @@ export function App() {
             </label>
             <div className="inline-info">
               <Info size={18} />
-              {demo
-                ? "演示工作区使用示例行情，真实工作区读取公开行情。"
-                : "读取公开行情，获取失败时会提示重试。"}
+              读取公开行情，获取失败时会提示重试。
               图片不包含币安原生交易跳转挂件。
             </div>
             <footer>
@@ -1838,18 +1809,14 @@ export function App() {
       )}
       {confirmation && (
         <Modal
-          title={
-            confirmation.draft.demo ? "确认模拟发布" : "确认发布到币安广场"
-          }
+          title="确认发布到币安广场"
           onClose={() => {
             if (!busy) setConfirmation(null);
           }}
         >
           <div className="confirm-content">
             <p>
-              {confirmation.draft.demo
-                ? "这次操作只验证流程，不会向币安发送内容。"
-                : "以下账号将分别收到一条内容，请核对后发布。"}
+              以下账号将分别收到一条内容，请核对后发布。
             </p>
             <div className="confirm-accounts">
               {confirmation.accounts.map((a) => (
@@ -1905,9 +1872,7 @@ export function App() {
                   ? "正在处理…"
                   : confirmation.error
                     ? "重试本次提交"
-                    : confirmation.draft.demo
-                      ? "确认模拟发布"
-                      : "确认发布"}
+                    : "确认发布"}
               </button>
             </footer>
           </div>
@@ -1915,7 +1880,7 @@ export function App() {
       )}
       {result && (
         <Modal
-          title={result.demo ? "模拟发布结果" : "发布结果"}
+          title="发布结果"
           onClose={() => setResult(null)}
         >
           <div className="publish-result">
@@ -1930,7 +1895,7 @@ export function App() {
                     r.accountId}
                 </strong>
                 <span className={"result-status " + r.status}>
-                  {statusText(r.status, result.demo)}
+                  {statusText(r.status)}
                 </span>
                 {r.error && <p>{r.error}</p>}
               </div>
@@ -1938,7 +1903,6 @@ export function App() {
           </div>
           <p className="modal-intro">
             结果已保存到发布历史。
-            {result.demo ? "本次未向币安发送任何内容。" : ""}
           </p>
           <div className="modal-footer">
             <button className="secondary" onClick={() => setResult(null)}>

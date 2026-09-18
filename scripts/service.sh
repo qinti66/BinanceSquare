@@ -122,7 +122,7 @@ prepare_config() {
 }
 source_hash() {
   {
-    for directory in src public scripts server worker .openai; do
+    for directory in src public scripts server shared worker .openai; do
       [[ ! -d "$directory" ]] || find "$directory" -type f -print0
     done
     find . -maxdepth 1 -type f \( -name 'package*.json' -o -name 'vite.config.*' -o -name 'index.html' \) -print0

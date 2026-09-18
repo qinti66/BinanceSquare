@@ -9,8 +9,15 @@ const dataDirectory = path.join(out, "data-" + Date.now());
 const api = createApiServer({
   dataDirectory,
   allowedOrigins: ["http://127.0.0.1:5175"],
-  fetchImpl: async () => {
-    throw Error("Real upstream requests are disabled in browser QA");
+  fetchImpl: async (url, options) => {
+    const value = String(url);
+    if (options?.method === "PUT" && value.startsWith("https://uploads.qa.example/")) return new Response(null, { status: 204 });
+    let data;
+    if (value.endsWith("/image/presignedUrl") || value.endsWith("/video/preSign")) data = { fileTicket: "qa-ticket", presignedUrl: "https://uploads.qa.example/media" };
+    else if (value.endsWith("/image/imageStatus")) data = { status: 1, imageUrl: "https://uploads.qa.example/image.png" };
+    else if (value.endsWith("/content/add")) data = { id: "123456789" };
+    else throw Error("Unexpected upstream in isolated browser QA: " + value);
+    return new Response(JSON.stringify({ code: "000000", data }), { headers: { "Content-Type": "application/json" } });
   },
 });
 const saveOriginal = api.store.save;
@@ -34,6 +41,19 @@ const context = await browser.newContext({
   deviceScaleFactor: 1,
 });
 const page = await context.newPage();
+await page.route("https://api.binance.com/api/v3/klines?**", route => route.fulfill({ json: Array.from({ length: 120 }, (_, i) => [1789603200000 + i * 14400000, "100", "104", "98", String(100 + (i % 3)), "1250"]) }));
+async function seedQaAccounts() {
+  await page.evaluate(async () => {
+    for (const name of ["QA 发布账号一", "QA 发布账号二"]) {
+      const response = await fetch("/api/accounts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, apiKey: "FAKE_QA_NOT_REAL_KEY_0123456789" }) });
+      if (!response.ok) throw Error("QA account fixture failed");
+    }
+  });
+  await page.reload({ waitUntil: "networkidle" });
+  await page.getByRole("checkbox").nth(0).check();
+  await page.getByRole("checkbox").nth(1).check();
+}
+
 const errors = [],
   checks = [];
 page.on("pageerror", (e) =>
@@ -56,7 +76,7 @@ const check = async (name, fn) => {
 try {
   await page.goto("http://127.0.0.1:5175", { waitUntil: "networkidle" });
   await page.getByRole("textbox", { name: "内容标题" }).waitFor();
-  await page.getByText("草稿已自动保存", { exact: true }).waitFor();
+  await expect(page.getByText("尚未输入内容", { exact: true })).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
   await page.screenshot({
     path: path.join(out, "desktop-initial.png"),
@@ -69,10 +89,7 @@ try {
         height: innerHeight,
         scrollWidth: document.documentElement.scrollWidth,
         scrollHeight: document.documentElement.scrollHeight,
-        chart: document
-          .querySelector(".chart-card")
-          .getBoundingClientRect()
-          .toJSON(),
+        chart: document.querySelector(".chart-card")?.getBoundingClientRect().toJSON() || null,
         body: document
           .querySelector(".editor-panel")
           .getBoundingClientRect()
@@ -99,8 +116,9 @@ try {
       }),
     );
   } else if (process.argv.includes("--extended")) {
+    await seedQaAccounts();
     await check(
-      "Video upload extracts thumbnail and duration, survives reload, then simulates publish",
+      "Video upload extracts thumbnail and duration, survives reload, then publishes against mock upstream",
       async () => {
         const fixture = await page.evaluate(async () => {
           const canvas = document.createElement("canvas");
@@ -153,9 +171,8 @@ try {
         );
         await fs.writeFile(file, Buffer.from(fixture.data, "base64"));
         await page.getByRole("button", { name: "视频", exact: true }).click();
-        await page
-          .getByRole("button", { name: "保存并切换", exact: true })
-          .click();
+        if (await page.getByRole("button", { name: "保存并切换", exact: true }).count())
+          await page.getByRole("button", { name: "保存并切换", exact: true }).click();
         await page
           .getByRole("textbox", { name: "内容标题" })
           .fill("QA 视频内容");
@@ -179,18 +196,18 @@ try {
           fullPage: true,
         });
         await page
-          .getByRole("button", { name: "模拟发布 2 个账号", exact: true })
+          .getByRole("button", { name: "发布到 2 个账号", exact: true })
           .click();
         await page
-          .getByRole("button", { name: "确认模拟发布", exact: true })
+          .getByRole("button", { name: "确认发布", exact: true })
           .click();
         await expect(
-          page.getByRole("dialog", { name: "模拟发布结果" }),
+          page.getByRole("dialog", { name: "发布结果" }),
         ).toBeVisible();
         await expect(
           page
             .locator(".publish-result")
-            .getByText("模拟成功", { exact: true }),
+            .getByText("发布成功", { exact: true }),
         ).toHaveCount(2);
         await page
           .getByRole("button", { name: "继续编辑", exact: true })
@@ -207,10 +224,10 @@ try {
           await route.abort("connectionreset");
         });
         await page
-          .getByRole("button", { name: "模拟发布 2 个账号", exact: true })
+          .getByRole("button", { name: "发布到 2 个账号", exact: true })
           .click();
         await page
-          .getByRole("button", { name: "确认模拟发布", exact: true })
+          .getByRole("button", { name: "确认发布", exact: true })
           .click();
         await expect(page.getByRole("alert")).toBeVisible();
         expect(
@@ -226,7 +243,7 @@ try {
         await page.unroute("**/api/publish");
         await page.reload({ waitUntil: "networkidle" });
         await expect(
-          page.getByRole("dialog", { name: "确认模拟发布" }),
+          page.getByRole("dialog", { name: "确认发布到币安广场" }),
         ).toBeVisible();
         const retry = page.waitForRequest(
           (r) => r.url().endsWith("/api/publish") && r.method() === "POST",
@@ -236,7 +253,7 @@ try {
           .click();
         expect((await retry).postDataJSON().requestId).toBe(captured.requestId);
         await expect(
-          page.getByRole("dialog", { name: "模拟发布结果" }),
+          page.getByRole("dialog", { name: "发布结果" }),
         ).toBeVisible();
         expect(
           (
@@ -307,7 +324,7 @@ try {
         await page.getByRole("checkbox").nth(0).check();
         await page.getByRole("checkbox").nth(1).check();
         const publish = page.getByRole("button", {
-          name: "模拟发布 2 个账号",
+          name: "发布到 2 个账号",
           exact: true,
         });
         await page.evaluate(() =>
@@ -321,7 +338,7 @@ try {
         });
         await publish.click();
         await expect(
-          page.getByRole("dialog", { name: "确认模拟发布", exact: true }),
+          page.getByRole("dialog", { name: "确认发布到币安广场", exact: true }),
         ).toBeVisible();
         await page
           .getByRole("button", { name: "返回编辑", exact: true })
@@ -375,15 +392,6 @@ try {
       await expect(
         page.getByText("QA 改名账号", { exact: true }),
       ).toBeVisible();
-      await page.getByRole("button", { name: "进入真实工作区" }).click();
-      await expect(
-        page.getByRole("button", { name: "真实工作区" }),
-      ).toBeVisible();
-      await expect(page.locator(".account-choice")).toHaveCount(1);
-      await page.getByRole("button", { name: "真实工作区" }).click();
-      await expect(
-        page.getByRole("button", { name: "演示工作区" }),
-      ).toBeVisible();
       await nav("账号管理").click();
       await page
         .getByRole("button", { name: "删除 QA 改名账号", exact: true })
@@ -395,6 +403,7 @@ try {
         fullPage: true,
       });
       await nav("创作中心").click();
+      await seedQaAccounts();
     });
     await check(
       "Editor emoji, topic and coin insertion and automatic draft recovery",
@@ -437,34 +446,37 @@ try {
       },
     );
     await check(
-      "Same K-line reinsertion and 2-account simulated publishing",
+      "K-line attachment and 2-account publishing against mock upstream",
       async () => {
         await page.getByRole("button", { name: "K线", exact: true }).click();
         await page
           .getByRole("button", { name: "插入图表", exact: true })
           .click();
+        await expect(page.locator(".chart-mode")).toHaveText("实时数据");
+        await page.getByRole("button", { name: "K线", exact: true }).click();
+        await page.getByRole("button", { name: "插入图表", exact: true }).click();
         await page
-          .getByRole("button", { name: "模拟发布 2 个账号", exact: true })
+          .getByRole("button", { name: "发布到 2 个账号", exact: true })
           .click();
         await expect(
-          page.getByRole("dialog", { name: "确认模拟发布", exact: true }),
+          page.getByRole("dialog", { name: "确认发布到币安广场", exact: true }),
         ).toBeVisible();
         await page
-          .getByRole("button", { name: "确认模拟发布", exact: true })
+          .getByRole("button", { name: "确认发布", exact: true })
           .click();
         await expect(
-          page.getByRole("dialog", { name: "模拟发布结果" }),
+          page.getByRole("dialog", { name: "发布结果" }),
         ).toBeVisible();
         await expect(
           page
             .locator(".publish-result")
-            .getByText("模拟成功", { exact: true }),
+            .getByText("发布成功", { exact: true }),
         ).toHaveCount(2);
         await page
           .getByRole("button", { name: "查看发布历史", exact: true })
           .click();
         await expect(page.locator(".history-row")).toHaveCount(1);
-        await expect(page.locator(".history-row")).toContainText("演示发布");
+        await expect(page.locator(".history-row")).toContainText("发布成功");
         await page.screenshot({
           path: path.join(out, "history.png"),
           fullPage: true,
@@ -511,9 +523,8 @@ try {
       "Article draft preserves rich formatting and image cover",
       async () => {
         await page.getByRole("button", { name: "文章", exact: true }).click();
-        await page
-          .getByRole("button", { name: "保存并切换", exact: true })
-          .click();
+        if (await page.getByRole("button", { name: "保存并切换", exact: true }).count())
+          await page.getByRole("button", { name: "保存并切换", exact: true }).click();
         await page
           .getByRole("textbox", { name: "文章标题" })
           .fill("QA 图文文章");
@@ -542,7 +553,7 @@ try {
         ).toHaveCount(1);
         await expect(page.locator(".media-tile img")).toBeVisible();
         await page
-          .getByRole("button", { name: "模拟发布 2 个账号", exact: true })
+          .getByRole("button", { name: "发布到 2 个账号", exact: true })
           .click();
         await expect(
           page.getByRole("dialog").getByText(/当前 API 按纯文本发布/),

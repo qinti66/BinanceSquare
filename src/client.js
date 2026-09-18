@@ -1,3 +1,5 @@
+import { normalizeDraft, isDemoPending } from "../shared/demo-cleanup.mjs";
+export { normalizeDraft } from "../shared/demo-cleanup.mjs";
 export async function api(path, options = {}) {
   const response = await fetch("/api" + path, {
     ...options,
@@ -35,39 +37,8 @@ export const dateText = (date) =>
     hour: "2-digit",
     minute: "2-digit",
   });
-export const demoAccounts = [
-  {
-    id: "demo-main",
-    name: "主账号",
-    avatar: "/assets/avatar-mountain.png",
-    demo: true,
-  },
-  {
-    id: "demo-market",
-    name: "行情观察",
-    avatar: "/assets/avatar-panda.png",
-    demo: true,
-  },
-  {
-    id: "demo-notes",
-    name: "交易笔记",
-    avatar: "/assets/avatar-sunset.png",
-    demo: true,
-  },
-];
-export const initialDraft = () => ({
-  id: uid(),
-  type: "post",
-  title: "今天的市场观察",
-  body: "市场的每一次波动，都值得认真记录。\n分享我的观察，也期待听到你的观点。",
-  tags: ["BTC", "市场观察"],
-  chart: { symbol: "BTCUSDT", interval: "4h" },
-  media: [],
-  selectedAccounts: ["demo-main", "demo-market"],
-  demo: true,
-  updatedAt: new Date().toISOString(),
-});
-export const emptyDraft = (demo = true) => ({
+export const initialDraft = () => emptyDraft();
+export const emptyDraft = (demo = false) => ({
   id: uid(),
   type: "post",
   title: "",
@@ -131,7 +102,7 @@ export function localDrafts() {
   try {
     const values = JSON.parse(localStorage.getItem("square.drafts") || "[]");
     return Array.isArray(values)
-      ? values.filter((d) => d?.id && d?.updatedAt)
+      ? values.map(normalizeDraft).filter((d) => d?.id && d?.updatedAt)
       : [];
   } catch {
     return [];
@@ -152,7 +123,7 @@ export function backupDraft(draft) {
 }
 export function mergeDrafts(first, second) {
   const map = new Map();
-  for (const d of [...first, ...second])
+  for (const d of [...first, ...second].map(normalizeDraft).filter(Boolean))
     if (!map.has(d.id) || map.get(d.id).updatedAt < d.updatedAt)
       map.set(d.id, d);
   return [...map.values()];
@@ -169,6 +140,7 @@ export function forgetLocalDraft(id) {
 export function readPending() {
   try {
     const c = JSON.parse(localStorage.getItem("square.pending") || "null");
+    if (isDemoPending(c)) { localStorage.removeItem("square.pending"); return null; }
     return c?.requestId && c?.payload && c?.draft && Array.isArray(c?.accounts)
       ? {
           ...c,
@@ -178,5 +150,30 @@ export function readPending() {
       : null;
   } catch {
     return null;
+  }
+}
+
+// Retain a one-time recovery copy without clearing unrelated browser storage.
+export function migrateBrowserWorkspace() {
+  let current = null;
+  try {
+    current = JSON.parse(localStorage.getItem("square.active") || "null");
+    const cached = JSON.parse(localStorage.getItem("square.drafts") || "[]");
+    const pending = JSON.parse(localStorage.getItem("square.pending") || "null");
+    const normalized = normalizeDraft(current);
+    const drafts = Array.isArray(cached) ? cached.map(normalizeDraft).filter(Boolean) : [];
+    const changed = JSON.stringify(normalized) !== JSON.stringify(current) ||
+      JSON.stringify(drafts) !== JSON.stringify(cached) || isDemoPending(pending);
+    if (changed) {
+      if (!localStorage.getItem("square.before-demo-cleanup.v1"))
+        localStorage.setItem("square.before-demo-cleanup.v1", JSON.stringify({ active: current, drafts: cached, pending }));
+      if (normalized) localStorage.setItem("square.active", JSON.stringify(normalized));
+      else localStorage.removeItem("square.active");
+      localStorage.setItem("square.drafts", JSON.stringify(drafts));
+      if (isDemoPending(pending)) localStorage.removeItem("square.pending");
+    }
+    return normalized;
+  } catch {
+    return normalizeDraft(current);
   }
 }

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { cleanDemoDatabase } from '../shared/demo-cleanup.mjs';
 import { randomBytes, createCipheriv, createDecipheriv, randomUUID } from 'node:crypto';
 
 const RETRY_DELAYS = [10, 25, 50, 100, 200];
@@ -53,6 +54,15 @@ export function createStore(directory, { fileSystem = fs, sleepSync = syncWait }
     const decipher = createDecipheriv('aes-256-gcm', masterKey, Buffer.from(value.iv, 'base64'));
     decipher.setAuthTag(Buffer.from(value.tag, 'base64'));
     return Buffer.concat([decipher.update(Buffer.from(value.ciphertext, 'base64')), decipher.final()]).toString('utf8');
+  }
+  const cleaned = cleanDemoDatabase(data);
+  if (cleaned.changed) {
+    const backupPath = path.join(directory, 'database.before-demo-cleanup-v1.json');
+    if (!fileSystem.existsSync(backupPath))
+      fileSystem.writeFileSync(backupPath, JSON.stringify(data, null, 2), { mode: 0o600, flag: 'wx' });
+    data.drafts = cleaned.data.drafts;
+    data.history = cleaned.data.history;
+    save();
   }
   // Never automatically resend work left in flight by a stopped process.
   let recovered = false;

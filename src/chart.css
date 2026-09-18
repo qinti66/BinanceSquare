@@ -4,7 +4,6 @@
 .chart-pair { font-weight: 650; letter-spacing: .1px; }
 .chart-period { color: #828a98; font-size: 11px; }
 .chart-mode { margin-left: 4px; color: #38be9b; background: #19302b; border-radius: 4px; padding: 2px 5px; font-size: 9px; line-height: 1.6; }
-.chart-mode.chart-demo { color: #baa765; background: #2c281b; }
 .chart-actions { display: flex; align-items: center; gap: 2px; }
 .chart-icon { display: grid; place-items: center; border: 0; border-radius: 4px; width: 24px; height: 24px; padding: 0; background: transparent; color: #7f8794; cursor: pointer; }
 .chart-icon:hover { color: #e6e8ee; background: #242830; }
