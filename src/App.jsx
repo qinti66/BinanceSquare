@@ -214,6 +214,8 @@ export function App() {
     [accounts, setAccounts] = useState([]),
     [drafts, setDrafts] = useState(localDrafts),
     [history, setHistory] = useState([]);
+  const [connectionTests, setConnectionTests] = useState({});
+  const connectionLocks = useRef(new Set());
   const [saveStatus, setSaveStatus] = useState("尚未输入内容"),
     [saveError, setSaveError] = useState(""),
     [serviceError, setServiceError] = useState("");
@@ -455,18 +457,43 @@ export function App() {
       if (!data.name) throw Error("请填写展示名称");
       if (!modal.account && !data.apiKey)
         throw Error("请填写币安广场 OpenAPI Key");
-      await api("/accounts" + (modal.account ? "/" + modal.account.id : ""), {
+      const saved = await api("/accounts" + (modal.account ? "/" + modal.account.id : ""), {
         method: modal.account ? "PATCH" : "POST",
         body: JSON.stringify(data),
+      });
+      setConnectionTests((previous) => {
+        const next = { ...previous };
+        delete next[saved.account.id];
+        return next;
       });
       setForm({ name: "", apiKey: "" });
       setModal(null);
       await refresh();
-      notify("账号已保存，密钥已加密");
+      notify("账号已保存，可点击测试连接检查服务器网络");
     } catch (e) {
       setFormError(e.message);
     } finally {
       setBusy(false);
+    }
+  };
+  const testConnection = async (account) => {
+    if (connectionLocks.current.has(account.id)) return;
+    connectionLocks.current.add(account.id);
+    setConnectionTests((previous) => ({ ...previous, [account.id]: { loading: true } }));
+    setModal({ kind: "connection-test", account });
+    try {
+      const response = await api(`/accounts/${account.id}/test`, {
+        method: "POST", body: "{}",
+      });
+      setConnectionTests((previous) => ({ ...previous, [account.id]: response.test }));
+    } catch (error) {
+      setConnectionTests((previous) => ({ ...previous, [account.id]: {
+        status: "error", title: "测试未完成", message: error.message,
+        code: error.code || "LOCAL_CONNECTION_ERROR", keyStatus: "unverified",
+        checkedAt: new Date().toISOString(),
+      } }));
+    } finally {
+      connectionLocks.current.delete(account.id);
     }
   };
   const upload = async (e) => {
@@ -1292,17 +1319,29 @@ export function App() {
                       </div>
                       <span className="configured">
                         <span className="status-dot" />
-                        已配置 · 待发布验证
+                        {connectionTests[a.id]?.loading ? "测试中…" : connectionTests[a.id]?.title || "已配置 · 未测试"}
                       </span>
                       <code>{a.maskedKey}</code>
-                      <div>
+                      <div className="account-actions">
+                        <button
+                          type="button"
+                          className="secondary connection-test-button"
+                          aria-label={"测试连接 " + a.name}
+                          disabled={connectionTests[a.id]?.loading}
+                          onClick={() => testConnection(a)}
+                        >
+                          {connectionTests[a.id]?.loading && <CircleNotch className="spin" size={15} />}
+                          {connectionTests[a.id]?.loading ? "测试中" : "测试连接"}
+                        </button>
                         <IB
+                          disabled={connectionTests[a.id]?.loading}
                           label={"编辑 " + a.name}
                           onClick={() => openAccount(a)}
                         >
                           <PencilSimple size={19} />
                         </IB>
                         <IB
+                          disabled={connectionTests[a.id]?.loading}
                           label={"删除 " + a.name}
                           onClick={() =>
                             setModal({ kind: "delete-account", account: a })
@@ -1318,7 +1357,7 @@ export function App() {
             <div className="account-note">
               <Info size={18} />
               <span>
-                交易 API Key 不能用于广场发帖；本工作台只调用广场内容接口。
+                测试连接从服务器发起，不会发布内容或上传文件。接口可达不代表发帖权限有效；请使用广场 OpenAPI Key，不能使用交易 API Key。
               </span>
             </div>
             {accounts.length > 0 && (
@@ -1526,6 +1565,34 @@ export function App() {
           {toast}
         </div>
       )}
+      {modal?.kind === "connection-test" && (
+        <Modal title="测试账号连接" onClose={() => setModal(null)}>
+          <div className="connection-result" aria-live="polite" aria-busy={!!connectionTests[modal.account.id]?.loading}>
+            <p className="modal-intro">{modal.account.name} · 使用已保存的广场密钥</p>
+            {connectionTests[modal.account.id]?.loading ? (
+              <div className="connection-loading"><CircleNotch className="spin" size={25} /><span>正在从服务器连接币安…</span></div>
+            ) : (
+              <>
+                <div className={"connection-outcome " + connectionTests[modal.account.id]?.status}>
+                  {connectionTests[modal.account.id]?.status === "reachable" ? <CheckCircle size={26} /> : <WarningCircle size={26} />}
+                  <h3>{connectionTests[modal.account.id]?.title}</h3>
+                </div>
+                <p className="connection-message">{connectionTests[modal.account.id]?.message}</p>
+                <dl className="connection-details">
+                  <dt>密钥状态</dt><dd>{({ invalid: "密钥不存在或无效", expired: "密钥已过期" })[connectionTests[modal.account.id]?.keyStatus] || "发帖权限尚未验证"}</dd>
+                  <dt>诊断代码</dt><dd>{connectionTests[modal.account.id]?.code}{connectionTests[modal.account.id]?.httpStatus ? ` · HTTP ${connectionTests[modal.account.id].httpStatus}` : ""}</dd>
+                  <dt>测试时间</dt><dd>{connectionTests[modal.account.id]?.checkedAt ? dateText(connectionTests[modal.account.id].checkedAt) : "—"}{Number.isFinite(connectionTests[modal.account.id]?.elapsedMs) ? ` · ${connectionTests[modal.account.id].elapsedMs} ms` : ""}</dd>
+                </dl>
+              </>
+            )}
+            <div className="inline-info"><Info size={18} />只查询接口响应，不会发布内容或上传文件。测试反映服务器的网络状况。</div>
+            <footer>
+              <button className="secondary" onClick={() => setModal(null)}>关闭结果</button>
+              <button className="primary" disabled={connectionTests[modal.account.id]?.loading} onClick={() => testConnection(modal.account)}>重新测试</button>
+            </footer>
+          </div>
+        </Modal>
+      )}
       {modal?.kind === "account" && (
         <Modal
           title={modal.account ? "编辑账号" : "添加发布账号"}
@@ -1569,7 +1636,7 @@ export function App() {
             </label>
             <div className="inline-info">
               <Info size={18} />
-              保存密钥不会验证账号，实际能力以发布结果为准。
+              保存后可在账号列表点击“测试连接”，检查服务器到币安的连接；实际发帖权限以发布结果为准。
             </div>
             {formError && (
               <p className="error-text" role="alert">

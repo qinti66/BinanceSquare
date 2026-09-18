@@ -1016,7 +1016,7 @@ p {
 .account-table .table-header,
 .account-row {
   display: grid;
-  grid-template-columns: 2fr 1.6fr 1.3fr 75px;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1.6fr) minmax(0, 1.3fr) 194px;
   gap: 16px;
   align-items: center;
   padding: 18px 10px;
@@ -1622,7 +1622,7 @@ p {
     font-size: 13px;
   }
   .account-row {
-    grid-template-columns: 1.5fr 1.3fr 1fr 75px !important;
+    grid-template-columns: minmax(0, 1.5fr) minmax(0, 1.3fr) minmax(0, 1fr) 194px;
   }
   .sidebar-tip {
     font-size: 11px;
@@ -2161,4 +2161,30 @@ p {
 }
 @media(max-width:380px){
  .popover{position:fixed;left:20px;right:20px;bottom:140px;width:auto;max-width:none;}
+}
+
+/* Account diagnostics stay inside the existing dark/gold workspace. */
+.account-row > div { min-width: 0; }
+.account-row strong { overflow-wrap: anywhere; }
+.account-row .account-actions { gap: 8px; justify-content: flex-end; }
+.account-row .connection-test-button { padding: 9px 11px; font-size: 12px; white-space: nowrap; }
+.connection-loading { display: flex; align-items: center; justify-content: center; gap: 12px; min-height: 180px; color: #d6bd74; }
+.connection-outcome { display: flex; align-items: center; gap: 10px; color: #e2bc66; margin-top: 25px; }
+.connection-outcome.error { color: #e4a39a; }
+.connection-outcome h3 { font-size: 19px; margin: 0; }
+.connection-message { color: #b0bbca; font-size: 14px; line-height: 1.9; overflow-wrap: anywhere; }
+.connection-details { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 12px 16px; padding: 18px; background: #11161d; border: 1px solid #303a49; border-radius: 7px; font-size: 12px; line-height: 1.7; }
+.connection-details dt { color: #8591a1; }
+.connection-details dd { margin: 0; color: #c0cad7; overflow-wrap: anywhere; }
+.connection-result footer { display: flex; justify-content: flex-end; gap: 12px; margin-top: 24px; }
+@media(max-width: 850px) {
+  .account-table .table-header { display: none; }
+  .account-table .account-row { min-width: 0; grid-template-columns: minmax(0, 1fr) auto; gap: 15px 10px; padding: 20px 0; }
+  .account-row > div:first-child { grid-column: 1 / -1; }
+  .account-row .configured { grid-column: 1 / -1; }
+  .account-row code { grid-column: 1; font-size: 11px; }
+  .account-row .account-actions { grid-column: 2; }
+  .account-row .account-actions .icon-button { width: 30px; }
+  .account-note { align-items: flex-start; line-height: 1.8; }
+  .account-note > svg { flex-shrink: 0; margin-top: 2px; }
 }

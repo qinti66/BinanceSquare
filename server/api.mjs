@@ -4,6 +4,7 @@ import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { createStore, publicAccount } from './store.mjs';
 import { createBinancePublisher } from './binance.mjs';
+import { createAccountConnectionTester } from './connection-test.mjs';
 
 const MB = 1024 * 1024;
 const ID = /^[a-zA-Z0-9_-]{1,100}$/;
@@ -50,6 +51,8 @@ async function readJson(request, limit = MB) {
 export function createApiServer({ dataDirectory = path.resolve('.data'), fetchImpl = fetch, pause, allowedOrigins = FRONTENDS, accessPolicy, localOnly = true } = {}) {
   const store = createStore(dataDirectory);
   const publisher = createBinancePublisher({ fetchImpl, pause });
+  const connectionTester = createAccountConnectionTester({ fetchImpl });
+  const activeAccountTests = new Set();
   const active = new Set();
   const idleWaiters = new Set();
   const whenIdle = () => active.size === 0 ? Promise.resolve() : new Promise(resolve => idleWaiters.add(resolve));
@@ -167,6 +170,21 @@ export function createApiServer({ dataDirectory = path.resolve('.data'), fetchIm
         const account = { id: randomUUID(), ...safeAccountFields(input), ...secretFields(input.apiKey), createdAt: now, updatedAt: now };
         store.data.accounts.push(account); store.save();
         return send(response, 201, { account: publicAccount(account) });
+      }
+      const accountTestRoute = pathname.match(/^\/api\/accounts\/([\w-]{1,100})\/test$/);
+      if (accountTestRoute && method === 'POST') {
+        const account = accountById(accountTestRoute[1]);
+        requireValue(account?.secret, '账号不存在或尚未配置 API Key。', 404, 'ACCOUNT_NOT_FOUND');
+        const input = await readJson(request, 1024);
+        requireValue(Object.keys(input).length === 0, '连接测试只接受空 JSON 对象，请先保存账号。');
+        requireValue(!activeAccountTests.has(account.id), '该账号正在测试连接，请等待结果。', 409, 'ACCOUNT_TEST_RUNNING');
+        requireValue(activeAccountTests.size < 8, '同时最多测试 8 个账号，请等待当前测试完成。', 429, 'ACCOUNT_TEST_LIMIT');
+        activeAccountTests.add(account.id);
+        try {
+          // The key remains server-side, and a diagnostic never writes to the ledger.
+          const result = await connectionTester(store.decrypt(account.secret));
+          return send(response, 200, { test: result });
+        } finally { activeAccountTests.delete(account.id); }
       }
       const accountRoute = pathname.match(/^\/api\/accounts\/([\w-]+)$/);
       if (accountRoute && ['PATCH', 'DELETE'].includes(method)) {

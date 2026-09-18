@@ -16,7 +16,8 @@
     "test:browser:media": "node scripts/browser-qa.mjs --extended",
     "start": "node --env-file=.env server/production.mjs",
     "test:production": "node --test tests/production.test.mjs",
-    "test:browser:production": "node scripts/production-browser-qa.mjs"
+    "test:browser:production": "node scripts/production-browser-qa.mjs",
+    "test:browser:connection": "node scripts/account-connection-browser-qa.mjs"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",

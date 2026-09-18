@@ -8,7 +8,7 @@
 
 - 账号、草稿、本站发布记录、媒体索引保存在 `.data/database.json`，媒体文件保存在 `.data/media/`。
 - API Key 经 AES-256-GCM 加密保存；主密钥位于 `.data/master.key`，尽力设置文件权限为 0600。Windows 使用当前目录继承的文件 ACL。主密钥和数据库处于同一电脑，**这不防范有权读取本机全部文件的用户或恶意程序**。备份需一并保存整个 `.data`，不要提交至代码仓库。
-- 响应仅包含掩码 Key 与“已配置”状态，不声称 Key 已验证或账号在线。Key 仅在手动确认发布时用于访问币安。
+- 响应仅包含掩码 Key 与“已配置”状态，不声称 Key 已验证或账号在线。只有用户手动测试连接或确认发布时，才在服务端解密 Key 并发送到官方币安接口。测试结果仅保留在当前页面，避免旧网络状态或旧密钥结果被误用。
 - 服务面向单管理员使用，不提供多租户隔离。生产入口对页面、接口与媒体统一认证；开发 API 只供本机访问。生产 HTTP 不提供传输加密，长期公网运行可配 HTTPS 反向代理。Sites 静态前端发布不会自动部署这套密钥存储。
 - 请求有 Host/Origin 限制，不开放 CORS；JSON、媒体大小、声明 MIME 和文件签名都会检查。图片最多 10 MB，视频最多 100 MB；只支持 PNG/JPEG/GIF/WebP 与 MP4/MOV/WebM/AVI，不接受 SVG/HTML。
 
@@ -24,6 +24,7 @@
 | GET `/api/accounts` | `{accounts: [...]}` |
 | POST `/api/accounts` | `{name, apiKey, color?, avatar?}` → `{account}` |
 | PATCH `/api/accounts/:id` | `{name?, apiKey?, color?, avatar?}` → `{account}`，空 Key 保留原值 |
+| POST `/api/accounts/:id/test` | `{}` → `{test:{status,title,message,code,keyStatus,checkedAt,elapsedMs,httpStatus?}}`，仅查询连接状态 |
 | DELETE `/api/accounts/:id` | `{deleted: true}`，只删除本站配置 |
 | GET `/api/drafts` | `{drafts: [...]}`，按最近更新排序 |
 | PUT `/api/drafts/:id` | 带 updatedAt 的草稿对象 → `{draft}`；拒绝旧编辑版本 |
@@ -60,6 +61,14 @@
 真实发布逐账号执行，每个结果为 `success`、`failed` 或 `uncertain`；处理中可为 `pending`。只有币安确认成功才标记 success。504/上游服务错误或提交时连接中断按 uncertain 处理，用户应先去广场检查，不能自动重发。
 
 同一个 requestId + 同样内容只发送一次，再次请求返回已有记录（`replayed:true`）；进行中返回 HTTP 202。相同 id 对应不同内容返回 409。请求超时时前端应保留 requestId，并通过历史记录查结果。进程重启将未完成结果标记 uncertain，永不自动重新提交。若只重试失败账号，应再次让用户确认并生成新的 requestId，不能把成功或未知账号混入自动重试。
+
+## 账号连接测试
+
+测试只调用官方 `POST /bapi/composite/v2/public/pgc/openApi/image/imageStatus`，使用随机新票据查询状态；不调用上传预签名、上传或发布接口，不写发布历史。此接口在 [官方 lib.mjs](https://github.com/binance/binance-skills-hub/blob/main/skills/binance/square-post/scripts/lib.mjs) 中用于只读媒体状态轮询；用不存在的票据探测连接是本工作台的实现方式，并非官方独立密钥验证功能。
+
+已完成的诊断返回 HTTP 200 与 `test`：`status` 为 `reachable` 或 `error`；`keyStatus` 为 `unverified`、`invalid` 或 `expired`。官方明确的 `220003` / `220004` 分别表示密钥不存在/过期；其他接口响应即便为 `000000` 也不宣称发帖权限有效。测试限时 12 秒，不跟随重定向，响应大小受限，不返回原始上游正文、密钥或异常信息。每账号不允许同时测试，所有账号最多同时 8 个测试；接口依旧受生产身份认证及来源校验保护。
+
+诊断区分 DNS、超时、TLS、网络不可达、连接拒绝/中断、HTTP 限流/访问限制和异常响应。发布前的媒体请求失败也展示具体网络原因；正式提交中断仍标记结果不确定，不会自动重发。
 
 ## 支持范围与限制
 

@@ -18,3 +18,5 @@ Server configuration preference: Keep user-editable server settings in the root 
 Production service settings must use .env as the sole source; omitted keys use application defaults rather than inherited HOST/PORT/admin/data/origin environment variables.
 
 Workspace content preference: Remove demo accounts, sample editor content, simulated publishing UI/history, and fabricated market candles. New installations start empty. On upgrades preserve real accounts, media, user-authored drafts and real publication history; only discard exact original seed drafts and explicitly simulated records. Never convert a pending simulated publication into a live submission.
+
+Account diagnostics preference: Provide an explicit per-account test button before publishing, using a non-publishing server-side probe. Distinguish network connectivity from key or posting permission validation, report useful DNS/TLS/timeout/HTTP errors without exposing credentials, and never create a post or upload media as a connection test.

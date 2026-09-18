@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { isIP } from 'node:net';
+import { classifyConnectionError } from './connection-test.mjs';
 
 const BASE = 'https://www.binance.com/bapi/composite';
 const V1 = `${BASE}/v1/public/pgc/openApi`;
@@ -21,8 +22,12 @@ export function createBinancePublisher({ fetchImpl = fetch, pause = (ms) => new 
         headers: { 'Content-Type': 'application/json', 'X-Square-OpenAPI-Key': apiKey, clienttype: 'binanceSkill' },
         body: JSON.stringify(body),
       });
-    } catch {
-      throw new PublishError(publishing ? '提交连接中断，发布结果未知；请到币安广场核对，避免重复发布。' : '币安服务连接失败，内容尚未提交。', publishing ? 'uncertain' : 'failed', 'CONNECTION_ERROR');
+    } catch (error) {
+      const diagnostic = classifyConnectionError(error);
+      const message = publishing
+        ? `${diagnostic.title}，提交连接中断，发布结果未知；请先到币安广场核对，避免重复发布。`
+        : `${diagnostic.message} 内容尚未提交，可在账号管理中测试连接。`;
+      throw new PublishError(message, publishing ? 'uncertain' : 'failed', diagnostic.code);
     }
     if (publishing && response.status >= 500) {
       throw new PublishError(`币安返回 HTTP ${response.status}，发布结果未知；请先到广场核对。`, 'uncertain', `HTTP_${response.status}`);
@@ -65,7 +70,10 @@ export function createBinancePublisher({ fetchImpl = fetch, pause = (ms) => new 
         method: 'PUT', redirect: 'error', headers: { 'Content-Type': media.type },
         body: await fs.readFile(path.join(directory, 'media', media.id)), signal: AbortSignal.timeout(120_000),
       });
-    } catch { throw new PublishError('媒体上传失败，内容尚未提交。'); }
+    } catch (error) {
+      const diagnostic = classifyConnectionError(error);
+      throw new PublishError(`媒体上传失败。${diagnostic.message} 内容尚未提交。`, 'failed', diagnostic.code);
+    }
     if (!response.ok) throw new PublishError(`媒体上传失败（HTTP ${response.status}），内容尚未提交。`);
     const processed = await poll(apiKey, ticket.fileTicket);
     if (!video && (typeof processed.imageUrl !== 'string' || !processed.imageUrl.startsWith('https://'))) {

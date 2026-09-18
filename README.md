@@ -43,7 +43,7 @@ HTTP 访问支持 IP + 端口；HTTP 本身不加密登录密码与传输内容�
 
 ## 功能与能力边界
 
-- 多账号添加、编辑显示名称、选择目标账号，密钥只在确认的真实发布中使用。
+- 多账号添加、编辑显示名称、选择目标账号；账号列表可手动测试服务器到币安的连接，显示 DNS、超时、TLS、HTTP 访问限制及明确的密钥错误。测试不发布内容、不上传文件，接口可达不代表发帖权限有效。
 - 帖子、文章、视频，图片及封面上传、视频自动截取封面；表情、话题、币种、链接。
 - 编辑即时在浏览器备份，并自动同步到服务端；草稿搜索、继续编辑、删除与导出。
 - 发布逐账号记录成功、失败或结果不确定；同一请求的重试不会重复发送。
@@ -67,6 +67,7 @@ npm run build
 npm run test:browser
 npm run test:browser:media
 npm run test:browser:production
+npm run test:browser:connection
 ```
 
 浏览器验收使用隔离数据与模拟上游，不修改用户 `.data`。需安装兼容 Chromium 的浏览器，通过 `PLAYWRIGHT_CHROMIUM_EXECUTABLE` 指定路径。
