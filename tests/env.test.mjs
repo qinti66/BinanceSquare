@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { parseEnv } from 'node:util';
 import { prepareEnvironment } from '../scripts/configure-env.mjs';
+import { readServiceEnvironment } from '../server/config.mjs';
+import { readProductionConfig } from '../server/production.mjs';
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-env-test-'));
@@ -65,4 +67,30 @@ test('existing .env wins over legacy and preserves user-provided password exactl
   assert.equal(result.source, 'existing');
   assert.equal(result.generatedPassword, undefined);
   assert.equal(fs.readFileSync(f.file, 'utf8'), contents);
+});
+
+test('.env wins over inherited deployment settings, including an empty public origin', t => {
+  const f = fixture(t);
+  fs.writeFileSync(f.file, 'HOST=0.0.0.0\nPORT=18091\nADMIN_USER=owner\nADMIN_PASSWORD=file-password-123456\nDATA_DIR=.file-data\nPUBLIC_ORIGIN=\n');
+  const values = readServiceEnvironment(f.root, { HOST: '127.0.0.1', PORT: '18092', ADMIN_USER: 'old', ADMIN_PASSWORD: 'old-password-123456', DATA_DIR: '.old-data', PUBLIC_ORIGIN: 'https://old.example.com', PATH: 'retain-system-path' });
+  const config = readProductionConfig(values);
+  assert.equal(config.host, '0.0.0.0');
+  assert.equal(config.port, 18091);
+  assert.equal(config.adminUser, 'owner');
+  assert.equal(config.adminPassword, 'file-password-123456');
+  assert.equal(config.publicOrigin, undefined);
+  assert.equal(path.basename(config.dataDirectory), '.file-data');
+  assert.equal(values.PATH, 'retain-system-path');
+});
+
+test('omitted server settings use application defaults instead of stale inherited values', t => {
+  const f = fixture(t);
+  fs.writeFileSync(f.file, 'PORT=18091\nPATH=do-not-replace-system-path\nNODE_OPTIONS=--inspect\n');
+  const values = readServiceEnvironment(f.root, { HOST: '0.0.0.0', ADMIN_USER: 'owner', PATH: 'system-path' });
+  assert.equal(values.HOST, undefined);
+  assert.equal(values.ADMIN_USER, undefined);
+  assert.equal(readProductionConfig(values).host, '0.0.0.0');
+  assert.equal(readProductionConfig(values).adminUser, 'admin');
+  assert.equal(values.PATH, 'system-path');
+  assert.equal(values.NODE_OPTIONS, undefined);
 });

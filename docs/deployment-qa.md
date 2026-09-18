@@ -4,7 +4,7 @@
 
 ## 已验证
 
-- `npm test`：49 项全部通过，包含生产鉴权、同源请求、静态资源隔离、媒体保护、优雅停止与已有发布/草稿回归。
+- `npm test`：51 项全部通过，包含生产鉴权、同源请求、静态资源隔离、媒体保护、优雅停止与已有发布/草稿回归。
 - `npm run build`：通过，输出生产静态网站。
 - `npm run test:browser:production`：5 项全部通过；Chrome 通过真实局域网 IPv4 + HTTP 访问，`isSecureContext=false`，没有页面错误。
 - 浏览器检查覆盖未登录拦截、登录后加载、HTTP 下 UUID 生成、新建/保存/刷新草稿、账号/媒体请求、两账号模拟发布。
@@ -35,3 +35,7 @@
 ## 统一 .env 配置回归
 
 新增 4 项测试覆盖首次配置、空密码初始化、旧版迁移与新文件优先级。Linux 隔离环境实测旧配置迁移后凭据和账号数据保留，编辑 .env 的 PORT 后重启在新端口提供服务；原 .env.production 保留不变。证据：artifacts/linux-env-smoke.log。
+
+## 服务器配置唯一来源回归
+
+修复外部环境变量覆盖配置的问题，服务器参数统一读取 .env，缺省项使用程序默认值。新增2项单元测试，并在Linux隔离副本中注入相互冲突的 HOST、PORT、ADMIN_USER、ADMIN_PASSWORD、DATA_DIR、PUBLIC_ORIGIN 运行启动脚本，验证监听、认证及数据仍按 .env 生效。状态输出区分本机健康检查地址与远程服务器IP。证据：artifacts/linux-config-precedence.log。

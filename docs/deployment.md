@@ -55,7 +55,7 @@ PUBLIC_ORIGIN=
 
 仅使用 `127.0.0.1` 作为 HOST 会限制为本机访问；需要 IP 访问时保持默认 `0.0.0.0`。云安全组与 Linux 防火墙须放行配置的 TCP 端口，脚本不修改防火墙。
 
-启动时若 `.env` 不存在，脚本优先从旧 `.env.production` 迁移并保留旧文件；没有旧文件时从 `.env.example` 创建。两者同时存在时以 `.env` 为准。
+启动时若 `.env` 不存在，脚本优先从旧 `.env.production` 迁移并保留旧文件；没有旧文件时从 `.env.example` 创建。两者同时存在时以 `.env` 为准。服务器参数只从 `.env` 读取，未填写的项使用程序默认值，不使用系统同名环境变量；空 `PUBLIC_ORIGIN` 表示关闭域名限制。
 
 `npm start` 是读取 `.env` 的前台生产入口，需要先运行 `bash start.sh` 初始化密码并构建 `dist/client`；日常使用一键脚本即可。
 
@@ -92,3 +92,29 @@ IP + 端口的 HTTP 访问已做兼容处理，不依赖仅 HTTPS 可用的 `cry
 - 发布结果不确定：先到币安广场核实。同一请求的恢复不会自动重新向币安提交。
 
 运行机制：生产模式只提供构建后的 `dist/client` 静态文件及同端口 API，不提供源代码或 `.data` 目录；开发模式仍独立使用 Vite 与本机 API。
+
+## 无法通过 IP 访问时
+
+以下以端口 8081 为例，先确认使用 `bash start.sh` 或 `bash restart.sh`，而非仅监听本机的 `npm run dev`。配置修改后只执行 start 不会重启已运行的进程。
+
+```dotenv
+HOST=0.0.0.0
+PORT=8081
+PUBLIC_ORIGIN=
+```
+
+浏览器使用 `http://服务器公网IP:8081`。`0.0.0.0` 是监听地址，`127.0.0.1` 是服务器本机检查地址，都不是另一台电脑应输入的服务器公网 IP。没有配置 HTTPS 代理时不要使用 https://。
+
+在服务器项目目录执行（不输出密码）：
+
+```bash
+bash status.sh
+ss -lntp 'sport = :8081'
+curl --noproxy '*' -i --connect-timeout 3 --max-time 5 http://127.0.0.1:8081/healthz
+```
+
+- 本机连接失败：先检查服务是否启动、实际监听端口和 logs/service.log。
+- 监听 127.0.0.1：外部无法直连，改 HOST 后 restart。
+- 本机 200、监听 0.0.0.0、外部超时：检查公网 IP、NAT 映射及云安全组/防火墙。
+- 首页 401：已连通，需要输入 .env 的网站访问账号和密码。
+- 首页 403 且 healthz 200：检查 PUBLIC_ORIGIN；直接 IP 访问时留空。healthz 不受域名限制，200 不能单独证明首页可访问。

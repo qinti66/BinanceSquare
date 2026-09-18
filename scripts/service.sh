@@ -102,8 +102,9 @@ ensure_node() {
 prepare_config() {
   "$NODE" "$ROOT/scripts/configure-env.mjs" || fail "无法准备 .env 配置。"
   local settings
-  settings="$("$NODE" --env-file="$ENV_FILE" -e '
-    const e=process.env; const port=e.PORT||"8081", host=e.HOST||"0.0.0.0";
+  settings="$("$NODE" --env-file="$ENV_FILE" --input-type=module -e '
+    import { readServiceEnvironment } from "./server/config.mjs";
+    const e=readServiceEnvironment(); const port=e.PORT||"8081", host=e.HOST||"0.0.0.0";
     if(!/^\d+$/.test(port)||+port<1||+port>65535) throw new Error("PORT 必须为 1–65535 的整数");
     if(!/^[a-zA-Z0-9.:-]+$/.test(host)) throw new Error("HOST 格式无效");
     if(!(e.ADMIN_USER||"admin").trim()) throw new Error("ADMIN_USER 不能为空");
@@ -218,7 +219,8 @@ status_service() {
   if load_record && is_owned_process; then
     if health_ok; then
       say "运行正常（PID $PID）"
-      say "访问地址：$SERVICE_URL"
+      say "配置文件：$ENV_FILE（修改后需 restart）"
+      say "本机健康检查地址：$SERVICE_URL（浏览器远程访问请使用服务器 IP）"
       say "日志：$LOG_FILE"
       return 0
     fi

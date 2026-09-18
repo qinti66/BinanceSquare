@@ -5,6 +5,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createApiServer } from './api.mjs';
+import { readServiceEnvironment } from './config.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MUTATIONS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
@@ -169,7 +170,7 @@ export function createProductionServer({ clientDirectory = path.join(ROOT, 'dist
 
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
   try {
-    const config = readProductionConfig();
+    const config = readProductionConfig(readServiceEnvironment());
     const app = createProductionServer(config);
     app.server.on('error', error => { console.error(`Production server failed: ${error.code || error.message}`); process.exitCode = 1; });
     app.server.listen(config.port, config.host, () => {
