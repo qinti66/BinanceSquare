@@ -33,7 +33,7 @@ const browser = await chromium.launch({ headless: true,
   executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || 'C:/Program Files/Google/Chrome/Application/chrome.exe',
   args: ['--no-proxy-server'],
 });
-const context = await browser.newContext({ httpCredentials: { username: 'qa-admin', password }, viewport: { width: 1487, height: 1058 } });
+const context = await browser.newContext({ viewport: { width: 1487, height: 1058 } });
 const page = await context.newPage();
 page.on('pageerror', e => errors.push(e.message));
 async function recordResponse(response) {
@@ -50,6 +50,10 @@ let beforeProbes;
 try {
   await check('Account connection controls work on authenticated plain HTTP + real IPv4', async () => {
     await page.goto(base, { waitUntil: 'networkidle' });
+    await page.getByLabel('用户名', { exact: true }).fill('qa-admin');
+    await page.getByLabel('密码', { exact: true }).fill(password);
+    await page.getByRole('button', { name: '登录', exact: true }).click();
+    await expect(page.getByRole('textbox', { name: '内容标题' })).toBeVisible();
     expect(await page.evaluate(() => isSecureContext)).toBe(false);
     responses.push(await page.evaluate(async (apiKey) => {
       const response = await fetch('/api/accounts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'QA 连接账号', apiKey }) });

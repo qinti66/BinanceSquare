@@ -1,11 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
-import { createHash, timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createApiServer } from './api.mjs';
 import { readServiceEnvironment } from './config.mjs';
+import { createLoginAuth, readLoginBody, LOGIN_BODY_LIMIT } from './auth.mjs';
+import { renderLoginPage } from '../src/login-page.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MUTATIONS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
@@ -17,7 +18,6 @@ const TYPES = {
   '.ttf': 'font/ttf', '.otf': 'font/otf', '.mp4': 'video/mp4', '.webm': 'video/webm',
   '.txt': 'text/plain; charset=utf-8', '.webmanifest': 'application/manifest+json',
 };
-const hash = value => createHash('sha256').update(value).digest();
 const inside = (root, file) => file === root || file.startsWith(`${root}${path.sep}`);
 
 // Accept genuine IPv4/IPv6 addresses and DNS hostnames, never URL credentials,
@@ -60,7 +60,7 @@ export function createProductionServer({ clientDirectory = path.join(ROOT, 'dist
     throw new Error('Production build is missing. Run npm run build first.');
   const dataRoot = fs.existsSync(dataDirectory) ? fs.realpathSync(dataDirectory) : path.resolve(dataDirectory);
   if (inside(clientRoot, dataRoot)) throw new Error('DATA_DIR must be outside dist/client.');
-  const credentialHash = hash(`${adminUser}:${adminPassword}`);
+  const auth = createLoginAuth({ adminUser, adminPassword, secureCookies: Boolean(publicUrl) });
   const api = createApiServer({ dataDirectory, fetchImpl, pause, accessPolicy: () => true, localOnly: false });
   let draining = false;
   let stopPromise;
@@ -68,11 +68,16 @@ export function createProductionServer({ clientDirectory = path.join(ROOT, 'dist
     response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...extra });
     response.end(JSON.stringify(data));
   };
-  function authenticated(request) {
-    const header = request.headers.authorization || '';
-    const match = /^Basic ([A-Za-z0-9+/]+={0,2})$/i.exec(header);
-    const supplied = match && header.length < 4096 ? Buffer.from(match[1], 'base64') : Buffer.alloc(0);
-    return timingSafeEqual(credentialHash, hash(supplied));
+  function loginPage(request, response, status = 200, error = '') {
+    response.writeHead(status, {
+      'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
+      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    });
+    response.end(request.method === 'HEAD' ? undefined : renderLoginPage({ error }));
+  }
+  function redirect(response, location, headers = {}) {
+    response.writeHead(303, { Location: location, 'Cache-Control': 'no-store', ...headers });
+    response.end();
   }
   function findStaticFile(pathname) {
     const segments = pathname.split('/').filter(Boolean);
@@ -111,9 +116,34 @@ export function createProductionServer({ clientDirectory = path.join(ROOT, 'dist
       if (draining) return reply(response, 503, { error: 'Service is stopping. Retry after restart.' }, { Connection: 'close', 'Retry-After': '5' });
       if (publicUrl && host.toLowerCase() !== publicUrl.host.toLowerCase())
         return reply(response, 403, { error: 'Host does not match PUBLIC_ORIGIN.' });
-      if (!authenticated(request)) return reply(response, 401, { error: 'Authentication required.' },
-        { 'WWW-Authenticate': 'Basic realm="Square Studio", charset="UTF-8"' });
       const expectedOrigin = publicUrl?.origin || `http://${host}`;
+      if (pathname === '/login') {
+        if (['GET', 'HEAD'].includes(request.method)) return loginPage(request, response);
+        if (request.method !== 'POST') return reply(response, 405, { error: 'Method not allowed.' }, { Allow: 'GET, HEAD, POST' });
+        if (request.headers.origin !== expectedOrigin || ['cross-site', 'same-site'].includes(request.headers['sec-fetch-site']))
+          return reply(response, 403, { error: 'Cross-site requests are not allowed.', code: 'ORIGIN_REJECTED' });
+        if (request.headers['content-type']?.split(';')[0].trim().toLowerCase() !== 'application/x-www-form-urlencoded')
+          return loginPage(request, response, 415, '请使用登录表单提交账号和密码。');
+        if (Number(request.headers['content-length']) > LOGIN_BODY_LIMIT) {
+          request.resume();
+          return loginPage(request, response, 413, '登录信息过长，请重新输入。');
+        }
+        let form;
+        try { form = await readLoginBody(request); }
+        catch (error) { return loginPage(request, response, error.status || 400, '登录信息无效，请重新输入。'); }
+        if (!auth.validCredentials(form.get('username'), form.get('password')))
+          return loginPage(request, response, 401, '账号或密码不正确，请重新输入。');
+        return redirect(response, '/', { 'Set-Cookie': auth.sessionCookie(expectedOrigin) });
+      }
+      if (!auth.authenticated(request, expectedOrigin)) {
+        const pageNavigation = ['GET', 'HEAD'].includes(request.method) &&
+          (request.headers.accept?.includes('text/html') || request.headers['sec-fetch-dest'] === 'document') &&
+          !(pathname === '/api' || pathname.startsWith('/api/') || pathname.startsWith('/assets/')) &&
+          (!path.posix.extname(pathname) || pathname.endsWith('.html'));
+        if (pageNavigation) return redirect(response, '/login');
+        return reply(response, 401, { error: 'Authentication required.', code: 'AUTH_REQUIRED', loginUrl: '/login' },
+          request.headers['sec-fetch-mode'] ? {} : { 'WWW-Authenticate': 'Basic realm="Square Studio", charset="UTF-8"' });
+      }
       if ((request.headers.origin && request.headers.origin !== expectedOrigin) ||
           ['cross-site', 'same-site'].includes(request.headers['sec-fetch-site']) ||
           (MUTATIONS.has(request.method) && request.headers.origin !== expectedOrigin))

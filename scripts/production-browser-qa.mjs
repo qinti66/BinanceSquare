@@ -26,20 +26,71 @@ const browser = await chromium.launch({ headless: true,
   executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || 'C:/Program Files/Google/Chrome/Application/chrome.exe',
   args: ['--no-proxy-server'],
 });
-const context = await browser.newContext({ httpCredentials: { username: 'qa-admin', password }, viewport: { width: 1487, height: 1058 } });
+const context = await browser.newContext({ viewport: { width: 1487, height: 1058 } });
 const page = await context.newPage();
+let secondContext, secondPage;
 const errors = [], checks = [];
 page.on('pageerror', e => errors.push(e.message));
 async function check(name, fn) { await fn(); checks.push(name); console.log('PASS ' + name); }
+async function login(loginPage) {
+  await loginPage.getByLabel('用户名', { exact: true }).fill('qa-admin');
+  await loginPage.getByLabel('密码', { exact: true }).fill(password);
+  await Promise.all([
+    loginPage.waitForURL(base + '/'),
+    loginPage.getByRole('button', { name: '登录', exact: true }).click(),
+  ]);
+  await expect(loginPage.getByRole('textbox', { name: '内容标题' })).toBeVisible();
+}
+async function verifySession(sessionContext, sessionPage) {
+  const cookies = (await sessionContext.cookies(base)).filter(cookie => cookie.name.startsWith('square_session_'));
+  expect(cookies).toHaveLength(1);
+  expect(cookies[0]).toMatchObject({ httpOnly: true, secure: false, sameSite: 'Lax', path: '/' });
+  expect(cookies[0].expires).toBeGreaterThan(Date.now() / 1000);
+  const storage = await sessionPage.evaluate(() => ({
+    visibleCookies: document.cookie,
+    local: JSON.stringify(Object.entries(localStorage)),
+    session: JSON.stringify(Object.entries(sessionStorage)),
+  }));
+  expect(storage.visibleCookies).not.toContain(cookies[0].name);
+  expect(storage.local).not.toContain(password);
+  expect(storage.local).not.toContain('wrong-qa-password');
+  expect(storage.session).not.toContain(password);
+  return cookies[0];
+}
 try {
-  await check('Anonymous clients cannot read the application or account vault', async () => {
+  await check('Anonymous data requests cannot read the application or account vault', async () => {
     for (const route of ['/', '/api/accounts', '/api/history', '/.data/master.key']) {
       const response = await fetch(base + route);
       expect(response.status).toBe(401);
     }
   });
-  await check('Production app loads with Basic authentication on plain HTTP + real IPv4', async () => {
+  await check('An unauthenticated browser receives a responsive login form and useful password errors', async () => {
     await page.goto(base, { waitUntil: 'networkidle' });
+    await expect(page).toHaveURL(base + '/login');
+    await expect(page.getByLabel('用户名', { exact: true })).toBeVisible();
+    await expect(page.getByLabel('密码', { exact: true })).toHaveAttribute('type', 'password');
+    await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
+    expect(await context.cookies(base)).toHaveLength(0);
+    await page.screenshot({ path: path.join(out, 'login-desktop.png'), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
+    await page.screenshot({ path: path.join(out, 'login-mobile.png'), fullPage: true });
+    await page.setViewportSize({ width: 1487, height: 1058 });
+    await page.getByLabel('用户名', { exact: true }).fill('qa-admin');
+    await page.getByLabel('密码', { exact: true }).fill('wrong-qa-password');
+    const [rejected] = await Promise.all([
+      page.waitForResponse(response => response.url() === base + '/login' && response.request().method() === 'POST'),
+      page.getByRole('button', { name: '登录', exact: true }).click(),
+    ]);
+    expect(rejected.status()).toBe(401);
+    await expect(page.getByRole('alert')).toContainText('账号或密码不正确');
+    await expect(page.getByLabel('密码', { exact: true })).toHaveValue('');
+    expect(await context.cookies(base)).toHaveLength(0);
+    await page.screenshot({ path: path.join(out, 'login-invalid-password.png'), fullPage: true });
+  });
+  await check('Production app loads after form login on plain HTTP + real IPv4', async () => {
+    await login(page);
+    await verifySession(context, page);
     await expect(page.getByRole('textbox', { name: '内容标题' })).toBeVisible();
     expect(await page.evaluate(() => isSecureContext)).toBe(false);
     expect(await page.evaluate(() => typeof crypto.randomUUID)).toBe('undefined');
@@ -88,6 +139,37 @@ try {
     await expect(page.getByRole('textbox', { name: '内容标题' })).toHaveValue('服务器 HTTP 草稿');
     await expect(page.getByRole('textbox', { name: '正文', exact: true })).toContainText('草稿仍可自动保存');
   });
+  await check('A second browser logs in independently and sees the shared server draft', async () => {
+    secondContext = await browser.newContext({ viewport: { width: 1487, height: 1058 } });
+    secondPage = await secondContext.newPage();
+    secondPage.on('pageerror', e => errors.push(e.message));
+    await secondPage.goto(base, { waitUntil: 'networkidle' });
+    await expect(secondPage).toHaveURL(base + '/login');
+    expect(await secondContext.cookies(base)).toHaveLength(0);
+    await login(secondPage);
+    const firstCookie = await verifySession(context, page);
+    const secondCookie = await verifySession(secondContext, secondPage);
+    expect(secondCookie.value).not.toBe(firstCookie.value);
+    const shared = await secondPage.evaluate(async () => {
+      const response = await fetch('/api/drafts');
+      return { status: response.status, data: await response.json() };
+    });
+    expect(shared.status).toBe(200);
+    expect(shared.data.drafts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: '服务器 HTTP 草稿', body: expect.stringContaining('草稿仍可自动保存') }),
+    ]));
+    await secondPage.getByRole('navigation').getByRole('button', { name: '草稿箱' }).click();
+    await expect(secondPage.getByRole('heading', { name: '服务器 HTTP 草稿' })).toBeVisible();
+    await secondPage.screenshot({ path: path.join(out, 'second-browser-shared-draft.png'), fullPage: true });
+    await secondPage.reload({ waitUntil: 'networkidle' });
+    expect(await secondPage.evaluate(async () => (await fetch('/api/drafts')).status)).toBe(200);
+    await verifySession(secondContext, secondPage);
+    // A fresh login in another browser must not invalidate the original session.
+    expect(await page.evaluate(async () => (await fetch('/api/drafts')).status)).toBe(200);
+    await page.reload({ waitUntil: 'networkidle' });
+    await expect(page.getByRole('textbox', { name: '内容标题' })).toHaveValue('服务器 HTTP 草稿');
+    expect((await verifySession(context, page)).value).toBe(firstCookie.value);
+  });
   await check('Authenticated media and account APIs work from the production origin', async () => {
     const result = await page.evaluate(async () => {
       const headers = { 'Content-Type': 'application/json' };
@@ -110,6 +192,17 @@ try {
       }
     });
     await page.reload({ waitUntil: 'networkidle' });
+    const sharedAccounts = await secondPage.evaluate(async () => {
+      const response = await fetch('/api/accounts');
+      return { status: response.status, data: await response.json() };
+    });
+    expect(sharedAccounts.status).toBe(200);
+    expect(sharedAccounts.data.accounts.map(account => account.name).sort()).toEqual(['QA 账号一', 'QA 账号二']);
+    await secondPage.reload({ waitUntil: 'networkidle' });
+    await secondPage.getByRole('navigation').getByRole('button', { name: '创作中心' }).click();
+    await expect(secondPage.locator('.account-choice')).toHaveCount(2);
+    await expect(secondPage.locator('.account-choice').filter({ hasText: 'QA 账号一' })).toBeVisible();
+    await expect(secondPage.locator('.account-choice').filter({ hasText: 'QA 账号二' })).toBeVisible();
     await page.getByRole('checkbox').nth(0).check();
     await page.getByRole('checkbox').nth(1).check();
     await page.getByRole('button', { name: '发布到 2 个账号', exact: true }).click();
@@ -118,6 +211,21 @@ try {
     await expect(page.getByRole('dialog', { name: '发布结果', exact: true })).toBeVisible();
     expect(publishCalls).toBe(2);
     await page.getByRole('button', { name: '继续编辑', exact: true }).click();
+  });
+  await check('Explicit Basic authentication remains compatible without a session cookie', async () => {
+    const basicContext = await browser.newContext({
+      extraHTTPHeaders: { Authorization: 'Basic ' + Buffer.from('qa-admin:' + password).toString('base64') },
+    });
+    try {
+      const basicPage = await basicContext.newPage();
+      basicPage.on('pageerror', e => errors.push(e.message));
+      await basicPage.goto(base, { waitUntil: 'networkidle' });
+      await expect(basicPage.getByRole('textbox', { name: '内容标题' })).toBeVisible();
+      expect(await basicPage.evaluate(async () => (await fetch('/api/accounts')).status)).toBe(200);
+      expect(await basicContext.cookies(base)).toHaveLength(0);
+    } finally {
+      await basicContext.close();
+    }
   });
   expect(errors).toEqual([]);
   await page.screenshot({ path: path.join(out, 'production-desktop.png'), fullPage: true });

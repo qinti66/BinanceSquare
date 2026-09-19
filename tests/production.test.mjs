@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { createProductionServer, readProductionConfig } from '../server/production.mjs';
+import { createLoginAuth, SESSION_SECONDS } from '../server/auth.mjs';
 
 const PASSWORD = 'test-only-admin-password-12345';
 const AUTH = `Basic ${Buffer.from(`admin:${PASSWORD}`).toString('base64')}`;
@@ -28,9 +29,9 @@ async function fixture(t, options = {}) {
     pause: async () => {}, logger: { info: message => logs.push(message), error: message => logs.push(message) }, ...options };
   let app = createProductionServer(settings);
   await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
-  function request(route, { method = 'GET', body, auth = true, host = '203.0.113.25:8080', origin, headers = {} } = {}) {
+  function request(route, { method = 'GET', body, rawBody, auth = true, host = '203.0.113.25:8080', origin, headers = {} } = {}) {
     return new Promise((resolve, reject) => {
-      const payload = body === undefined ? undefined : JSON.stringify(body);
+      const payload = rawBody === undefined ? (body === undefined ? undefined : JSON.stringify(body)) : rawBody;
       const requestHeaders = { Host: host, Connection: 'close', ...(auth ? { Authorization: AUTH } : {}),
         ...(origin === undefined ? {} : { Origin: origin }),
         ...(payload ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } : {}), ...headers };
@@ -196,4 +197,165 @@ test('shutdown deadline is bounded and explicitly reports uncertain in-flight pu
   // Let the injected upstream finish writing before fixture removal; a real CLI
   // exits on the deadline and createStore recovers the disk ledger as uncertain.
   await sleep(30);
+});
+
+function login(f, { username = 'admin', password = PASSWORD, headers = {}, ...options } = {}) {
+  return f.request('/login', {
+    method: 'POST', auth: false, origin: 'http://203.0.113.25:8080',
+    rawBody: new URLSearchParams({ username, password }).toString(),
+    ...options, headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...headers },
+  });
+}
+function sessionCookie(response) {
+  assert.ok(response.headers['set-cookie']?.length, 'successful login must issue a cookie');
+  return response.headers['set-cookie'][0].split(';', 1)[0];
+}
+
+test('new browser navigation reaches a usable login page while APIs and assets remain protected', async t => {
+  const f = await fixture(t);
+  for (const method of ['GET', 'HEAD']) {
+    for (const headers of [{ Accept: 'text/html' }, { 'Sec-Fetch-Dest': 'document' }]) {
+      const response = await f.request('/', { auth: false, method, headers });
+      assert.equal(response.status, 303);
+      assert.equal(response.headers.location, '/login');
+      assert.equal(response.headers['www-authenticate'], undefined);
+      assert.equal(response.headers['cache-control'], 'no-store');
+    }
+  }
+  const page = await f.request('/login', { auth: false, headers: { Accept: 'text/html' } });
+  assert.equal(page.status, 200);
+  assert.match(page.headers['content-type'], /^text\/html/);
+  assert.equal(page.headers['www-authenticate'], undefined);
+  assert.equal(page.headers['cache-control'], 'no-store');
+  assert.match(page.text, /name=["']username["']/);
+  assert.match(page.text, /name=["']password["']/);
+  assert.ok(!page.text.includes(PASSWORD), 'the login page must never contain the configured password');
+  const head = await f.request('/login', { auth: false, method: 'HEAD' });
+  assert.equal(head.status, 200); assert.equal(head.text, '');
+  for (const route of ['/api/accounts', '/api/drafts', '/api/media/id', '/assets/app-a1B2c3D4.js']) {
+    const response = await f.request(route, { auth: false, headers: { Accept: 'text/html', 'Sec-Fetch-Dest': 'document' } });
+    assert.equal(response.status, 401, route);
+    assert.equal(response.headers.location, undefined);
+    assert.match(response.headers['content-type'], /^application\/json/);
+  }
+  const api = await f.request('/api/accounts', { auth: false, headers: { 'Sec-Fetch-Mode': 'cors' } });
+  assert.equal(api.status, 401);
+  assert.equal(api.json.code, 'AUTH_REQUIRED');
+  assert.equal(api.json.loginUrl, '/login');
+  assert.equal(api.headers['www-authenticate'], undefined);
+  const script = await f.request('/api/accounts', { auth: false });
+  assert.match(script.headers['www-authenticate'], /^Basic/);
+});
+
+test('form login issues independent HTTP sessions that share persisted drafts and authenticated media', async t => {
+  const f = await fixture(t);
+  const first = await login(f);
+  assert.equal(first.status, 303); assert.equal(first.headers.location, '/');
+  assert.equal(first.headers['www-authenticate'], undefined);
+  assert.equal(first.headers['cache-control'], 'no-store');
+  const setCookie = first.headers['set-cookie'][0];
+  for (const attribute of [/;\s*HttpOnly(?:;|$)/i, /;\s*SameSite=Lax(?:;|$)/i, /;\s*Path=\/(?:;|$)/i, /;\s*Max-Age=43200(?:;|$)/i])
+    assert.match(setCookie, attribute);
+  assert.doesNotMatch(setCookie, /;\s*(?:Secure|Domain=)/i);
+  assert.ok(!setCookie.includes(PASSWORD));
+  const firstCookie = sessionCookie(first);
+  const second = await login(f);
+  assert.equal(second.status, 303);
+  const secondCookie = sessionCookie(second);
+  assert.notEqual(firstCookie, secondCookie, 'each browser must get its own session');
+  const firstHeaders = { Cookie: firstCookie };
+  const secondHeaders = { Cookie: secondCookie };
+  const draft = { type: 'post', title: '跨浏览器草稿', body: '两个浏览器共享服务器保存的内容。', updatedAt: '2026-09-19T00:00:00.000Z' };
+  const saved = await f.request('/api/drafts/shared-login-draft', {
+    method: 'PUT', body: draft, auth: false, origin: 'http://203.0.113.25:8080', headers: firstHeaders,
+  });
+  assert.equal(saved.status, 200);
+  const listed = await f.request('/api/drafts', { auth: false, headers: secondHeaders });
+  assert.equal(listed.status, 200);
+  assert.equal(listed.json.drafts.find(d => d.id === 'shared-login-draft').body, draft.body);
+  const uploaded = await f.request('/api/media', post({ name: 'session.png', type: 'image/png', data: PNG }, { auth: false, headers: secondHeaders }));
+  assert.equal(uploaded.status, 201);
+  const media = await f.request(uploaded.json.media.url, { auth: false, headers: firstHeaders });
+  assert.equal(media.status, 200); assert.deepEqual(media.buffer, Buffer.from(PNG, 'base64'));
+  assert.equal((await f.request(uploaded.json.media.url, { auth: false })).status, 401);
+  for (const headers of [firstHeaders, secondHeaders]) {
+    assert.equal((await f.request('/', { auth: false, headers })).status, 200);
+    assert.equal((await f.request('/assets/app-a1B2c3D4.js', { auth: false, headers })).status, 200);
+    assert.equal((await f.request('/api/accounts', { auth: false, headers })).status, 200);
+  }
+});
+
+test('login rejects invalid credentials, cross-site forms and unsupported or oversized request bodies', async t => {
+  const f = await fixture(t);
+  const failures = [await login(f, { password: 'incorrect-login-password' }), await login(f, { username: 'unknown-login-user' })];
+  for (const response of failures) {
+    assert.equal(response.status, 401);
+    assert.match(response.headers['content-type'], /^text\/html/);
+    assert.equal(response.headers['www-authenticate'], undefined);
+    assert.match(response.text, /用户名|密码|登录/);
+    assert.ok(!response.text.includes(PASSWORD));
+    assert.ok(!response.text.includes('incorrect-login-password'));
+    assert.ok(!response.text.includes('unknown-login-user'));
+  }
+  assert.equal(failures[0].text, failures[1].text, 'unknown user and incorrect password must have the same generic response');
+  for (const origin of [undefined, 'https://evil.example', 'http://203.0.113.25:8081'])
+    assert.equal((await login(f, { origin })).status, 403);
+  for (const site of ['cross-site', 'same-site'])
+    assert.equal((await login(f, { headers: { 'Sec-Fetch-Site': site } })).status, 403);
+  assert.equal((await login(f, { headers: { 'Content-Type': 'application/json' } })).status, 415);
+  assert.equal((await login(f, { rawBody: 'password=' + 'x'.repeat(128 * 1024) })).status, 413);
+  assert.equal((await f.request('/api/accounts', { auth: false })).status, 401);
+});
+
+test('session cookies cannot bypass origin checks, another origin, tampering or a server restart', async t => {
+  const f = await fixture(t);
+  const cookie = sessionCookie(await login(f));
+  const headers = { Cookie: cookie };
+  const account = { name: 'Cookie account', apiKey: 'fake-cookie-key-only-for-tests' };
+  for (const origin of [undefined, 'https://evil.example', 'http://203.0.113.25:8081'])
+    assert.equal((await f.request('/api/accounts', { method: 'POST', body: account, auth: false, origin, headers })).status, 403);
+  for (const site of ['cross-site', 'same-site'])
+    assert.equal((await f.request('/api/accounts', post(account, { auth: false, headers: { ...headers, 'Sec-Fetch-Site': site } }))).status, 403);
+  assert.equal((await f.request('/api/accounts', { auth: false, headers, origin: 'https://evil.example' })).status, 403);
+  assert.equal((await f.request('/api/accounts', { auth: false, headers, host: '203.0.113.26:8080' })).status, 401);
+  assert.equal((await f.request('/api/accounts', { auth: false, headers, host: '203.0.113.25:8081' })).status, 401);
+  for (const forged of [cookie + 'invalid', cookie.replace(/=.*/, '=forged-session-token'), 'unrelated=anything'])
+    assert.equal((await f.request('/api/accounts', { auth: false, headers: { Cookie: forged } })).status, 401);
+  assert.equal((await f.request('/api/accounts', post(account, { auth: false, headers }))).status, 201);
+  await f.restart();
+  assert.equal((await f.request('/api/accounts', { auth: false, headers })).status, 401);
+  assert.equal((await f.request('/api/accounts')).status, 200, 'existing Basic clients remain compatible after restart');
+  const renewed = sessionCookie(await login(f));
+  assert.notEqual(renewed, cookie);
+  assert.equal((await f.request('/api/accounts', { auth: false, headers: { Cookie: renewed } })).json.accounts[0].name, account.name);
+});
+
+test('HTTPS proxy login enforces PUBLIC_ORIGIN and sets Secure without trusting forwarded headers', async t => {
+  const f = await fixture(t, { publicOrigin: 'https://square.example.com' });
+  const host = 'square.example.com';
+  const origin = 'https://square.example.com';
+  assert.equal((await f.request('/login', { auth: false })).status, 403);
+  assert.equal((await login(f)).status, 403);
+  assert.equal((await login(f, { host, origin: 'http://square.example.com', headers: { 'X-Forwarded-Proto': 'https' } })).status, 403);
+  assert.equal((await login(f, { origin, headers: { 'X-Forwarded-Host': host } })).status, 403);
+  const response = await login(f, { host, origin });
+  assert.equal(response.status, 303);
+  assert.match(response.headers['set-cookie'][0], /;\s*Secure(?:;|$)/i);
+  const headers = { Cookie: sessionCookie(response) };
+  assert.equal((await f.request('/api/accounts', { auth: false, host, headers })).status, 200);
+  assert.equal((await f.request('/api/accounts', post({ name: 'Proxy cookie', apiKey: 'fake-proxy-cookie-key' }, { auth: false, host, origin, headers }))).status, 201);
+});
+test('signed browser sessions expire after twelve hours even when a client retains the cookie', t => {
+  let now = Date.UTC(2026, 8, 19);
+  t.mock.method(Date, 'now', () => now);
+  const auth = createLoginAuth({ adminUser: 'admin', adminPassword: PASSWORD, secureCookies: false });
+  const origin = 'http://203.0.113.25:8080';
+  const cookie = auth.sessionCookie(origin).split(';', 1)[0];
+  const request = { headers: { cookie } };
+  assert.equal(auth.authenticated(request, origin), true);
+  now += SESSION_SECONDS * 1000 - 1;
+  assert.equal(auth.authenticated(request, origin), true);
+  now += 1;
+  assert.equal(auth.authenticated(request, origin), false);
+  assert.equal(auth.authenticated({ headers: { authorization: AUTH } }, origin), true, 'session expiry does not disable Basic authentication');
 });

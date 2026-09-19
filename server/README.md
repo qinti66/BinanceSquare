@@ -1,6 +1,8 @@
 # API 与服务器运行模式
 
-服务使用 Node.js 原生模块。Linux 服务器通过 `bash start.sh` 启动 `server/production.mjs`，默认监听 `0.0.0.0:8081`，同端口提供构建后的网页与 API，并要求管理员 HTTP Basic 认证。配置和一键管理见 [部署说明](../docs/deployment.md)。
+服务使用 Node.js 原生模块。Linux 服务器通过 `bash start.sh` 启动 `server/production.mjs`，默认监听 `0.0.0.0:8081`，同端口提供构建后的网页与 API。浏览器通过 `/login` 网页提交管理员账号和密码，登录后使用会话 Cookie；API 客户端仍兼容 HTTP Basic 认证。配置和一键管理见 [部署说明](../docs/deployment.md)。
+
+同一管理员可在多个浏览器同时登录，各浏览器会话独立，不会互相挤下线。会话有效期为 12 小时，签名密钥仅保存在服务进程内，服务器重启后会话失效并需重新登录。登录凭据使用根目录 `.env` 的 `ADMIN_USER` 与 `ADMIN_PASSWORD`，与币安广场 OpenAPI Key 无关。
 
 开发模式入口 `server/index.mjs` 仍仅绑定 `127.0.0.1:8787`，由 Vite 同源代理 `/api`。API_PORT 仅控制开发 API 端口；生产使用 PORT。
 
@@ -14,7 +16,7 @@
 
 ## 接口
 
-生产模式除 `/healthz` 外均先验证访问凭据；写请求同时验证 Origin。`/api/health` 返回 localOnly 表示当前模式，不包含密钥。
+生产模式的 `/login` 登录入口与 `/healthz` 最小状态接口可匿名访问，其余工作台页面、接口和媒体先验证访问凭据；写请求同时验证 Origin。未认证的页面访问显示网页登录页或跳转至登录页，API 请求返回 401 JSON。`/api/health` 返回 localOnly 表示当前模式，不包含密钥。
 
 所有 JSON 错误格式为 `{ "error": "可读错误", "code": "CODE" }`。
 

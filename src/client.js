@@ -12,7 +12,7 @@ export async function api(path, options = {}) {
     throw new Error("服务暂时不可用，请稍后重试。");
   }
   if (!response.ok) {
-    const error = new Error(data.error || "操作失败，请重试。");
+    const error = new Error(response.status === 401 ? "登录已失效，请刷新页面后重新登录。当前草稿仍保留在本浏览器。" : data.error || "操作失败，请重试。");
     error.code = data.code;
     error.status = response.status;
     throw error;
