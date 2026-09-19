@@ -51,7 +51,7 @@ import {
   migrateBrowserWorkspace,
 } from "./client";
 import CandleChart from "./Chart";
-import { uploadFile, extractVideoCover } from "./media";
+import { uploadFile, extractVideoCover, clipboardImages } from "./media";
 const types = { post: "帖子", article: "文章", video: "视频" };
 const emojis = [
   "😀",
@@ -168,7 +168,7 @@ function Modal({ title, children, onClose, wide = false }) {
     </div>
   );
 }
-function Editor({ draft, onChange, editorRef }) {
+function Editor({ draft, onChange, editorRef, onImagePaste }) {
   useEffect(() => {
     if (editorRef.current) {
       editorRef.current.innerHTML = draft.html ? cleanHtml(draft.html) : "";
@@ -184,7 +184,9 @@ function Editor({ draft, onChange, editorRef }) {
       contentEditable
       suppressContentEditableWarning
       ref={editorRef}
-      data-placeholder="分享你的市场观察，让每一次思考被看见…"
+      data-placeholder={draft.type === "video"
+        ? "分享你的市场观察，让每一次思考被看见…"
+        : "分享你的市场观察，也可直接粘贴图片（Ctrl+V / ⌘V）…"}
       onInput={(e) =>
         onChange({
           body: e.currentTarget.innerText,
@@ -193,11 +195,10 @@ function Editor({ draft, onChange, editorRef }) {
       }
       onPaste={(e) => {
         e.preventDefault();
-        document.execCommand(
-          "insertText",
-          false,
-          e.clipboardData.getData("text/plain"),
-        );
+        const images = clipboardImages(e.clipboardData);
+        if (images.length) onImagePaste(images);
+        const text = e.clipboardData.getData("text/plain");
+        if (text) document.execCommand("insertText", false, text);
       }}
     />
   );
@@ -496,13 +497,10 @@ export function App() {
       connectionLocks.current.delete(account.id);
     }
   };
-  const upload = async (e) => {
+  const uploadFiles = async (files) => {
     if (uploadLock.current) {
-      e.target.value = "";
       return notify("媒体正在上传，请稍候");
     }
-    const files = [...e.target.files];
-    e.target.value = "";
     if (!files.length) return;
     uploadLock.current = true;
     setUploading(true);
@@ -539,10 +537,12 @@ export function App() {
         const cap = draft.type === "article" ? 1 : 4 - (draft.chart ? 1 : 0);
         if (draft.media.length + files.length > cap)
           throw Error("当前最多可添加 " + cap + " 张图片（K 线占用一张）");
-        const ms = [];
         for (const f of files) {
           if (!f.type.startsWith("image/")) throw Error("请选择图片文件");
           if (f.size > 10 * 1024 * 1024) throw Error("图片不能超过 10 MB");
+        }
+        const ms = [];
+        for (const f of files) {
           ms.push(await uploadFile(f));
         }
         setDraft((current) =>
@@ -911,7 +911,18 @@ export function App() {
                     )}
                   </div>
                 )}
-                <Editor draft={draft} onChange={update} editorRef={editor} />
+                <Editor
+                  draft={draft}
+                  onChange={update}
+                  editorRef={editor}
+                  onImagePaste={(files) => {
+                    if (draft.type === "video") {
+                      notify("视频内容不支持粘贴图片，请切换到帖子或文章");
+                      return;
+                    }
+                    uploadFiles(files);
+                  }}
+                />
                 <div className="tag-list">
                   {draft.tags.map((t) => (
                     <button
@@ -991,6 +1002,7 @@ export function App() {
                   <button
                     className="tool"
                     disabled={uploading}
+                    title={draft.type === "video" ? "选择视频文件" : "选择图片文件，或在正文中直接粘贴图片（Ctrl+V / ⌘V）"}
                     onClick={() => fileInput.current.click()}
                   >
                     <ImageSquare size={24} />
@@ -1557,7 +1569,11 @@ export function App() {
             : "image/png,image/jpeg,image/gif,image/webp"
         }
         multiple={draft.type === "post"}
-        onChange={upload}
+        onChange={(e) => {
+          const files = Array.from(e.target.files || []);
+          e.target.value = "";
+          uploadFiles(files);
+        }}
       />
       {toast && (
         <div className="toast" role="status">

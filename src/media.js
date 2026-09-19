@@ -1,3 +1,14 @@
+// Read files synchronously during the paste event; no clipboard permission is needed.
+export function clipboardImages(data) {
+  const images = Array.from(data?.items || [])
+    .filter(item => item.kind === 'file' && item.type.startsWith('image/'))
+    .map(item => item.getAsFile())
+    .filter(Boolean);
+  // Browsers may expose the same image in both lists. Use files only as a fallback.
+  return images.length ? images : Array.from(data?.files || [])
+    .filter(file => file.type.startsWith('image/'));
+}
+
 function readBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
